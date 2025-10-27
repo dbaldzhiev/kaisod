@@ -20,6 +20,11 @@ def ensure_storage(base_path: str = DEFAULT_BASE_PATH) -> Path:
     return base
 
 
+def _normalize_file_url(file_url: Optional[str]) -> str:
+    """Normalize optional file URLs for storage and comparisons."""
+    return file_url or ""
+
+
 class Database:
     """Thin wrapper around sqlite3 with helpers tailored for the app."""
 
@@ -50,14 +55,14 @@ class Database:
                     id INTEGER PRIMARY KEY,
                     title TEXT NOT NULL,
                     source_url TEXT,
-                    file_url TEXT,
+                    file_url TEXT NOT NULL DEFAULT '',
                     last_seen_date TEXT,
                     first_seen_at TEXT,
                     last_seen_at TEXT,
                     monitored INTEGER NOT NULL DEFAULT 0,
                     ignored INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'unknown',
-                    UNIQUE(title, COALESCE(file_url, ''))
+                    UNIQUE(title, file_url)
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -107,10 +112,11 @@ class Database:
     # Item helpers
     # ------------------------------------------------------------------
     def get_item_by_identity(self, title: str, file_url: Optional[str]) -> Optional[sqlite3.Row]:
+        normalized_url = _normalize_file_url(file_url)
         with self.cursor() as cur:
             cur.execute(
-                "SELECT * FROM items WHERE title = ? AND COALESCE(file_url, '') = COALESCE(?, '')",
-                (title, file_url),
+                "SELECT * FROM items WHERE title = ? AND file_url = ?",
+                (title, normalized_url),
             )
             return cur.fetchone()
 
@@ -122,6 +128,7 @@ class Database:
         observed_date: str,
         now: datetime,
     ) -> int:
+        normalized_url = _normalize_file_url(file_url)
         with self.cursor() as cur:
             cur.execute(
                 """
@@ -131,7 +138,7 @@ class Database:
                 (
                     title,
                     source_url,
-                    file_url,
+                    normalized_url,
                     observed_date,
                     now.strftime(ISO_FORMAT),
                     now.strftime(ISO_FORMAT),
