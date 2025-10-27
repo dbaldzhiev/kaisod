@@ -10,9 +10,21 @@ from typing import Callable, Optional
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, url_for
 
-from . import crawler, detector
-from .downloader import DownloadError, download_item
-from .models import Database, ensure_storage
+if __package__ in (None, ""):
+    import sys
+
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+    if CURRENT_DIR not in sys.path:
+        sys.path.insert(0, CURRENT_DIR)
+
+    import crawler  # type: ignore[no-redef]
+    import detector  # type: ignore[no-redef]
+    from downloader import DownloadError, download_item  # type: ignore[no-redef]
+    from models import Database, ensure_storage  # type: ignore[no-redef]
+else:
+    from . import crawler, detector
+    from .downloader import DownloadError, download_item
+    from .models import Database, ensure_storage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
