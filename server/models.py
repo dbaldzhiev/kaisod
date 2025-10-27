@@ -1,7 +1,9 @@
 """SQLite helpers for Kais monitor."""
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,6 +13,96 @@ from typing import Dict, Iterable, Iterator, List, Optional
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%S"
 DEFAULT_BASE_PATH = os.environ.get("KAIS_MONITOR_BASE", "/var/lib/kais-monitor")
 DB_FILENAME = "kais.sqlite3"
+CONFIG_FILE_ENV = "KAIS_MONITOR_STORAGE_CONFIG"
+CONFIG_DIR_ENV = "KAIS_MONITOR_CONFIG_DIR"
+
+
+def _config_directory() -> Path:
+    override = os.environ.get(CONFIG_DIR_ENV)
+    if override:
+        return Path(override).expanduser()
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_home:
+        return Path(xdg_home).expanduser() / "kais-monitor"
+    return Path.home() / ".config" / "kais-monitor"
+
+
+def _config_path() -> Path:
+    override = os.environ.get(CONFIG_FILE_ENV)
+    if override:
+        path = Path(override).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+    directory = _config_directory()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / "storage.json"
+
+
+def load_configured_base_path() -> Path:
+    """Return the configured base path, respecting env vars and config file."""
+
+    env_path = os.environ.get("KAIS_MONITOR_BASE")
+    if env_path:
+        return Path(env_path).expanduser()
+
+    config = _config_path()
+    if config.exists():
+        try:
+            data = json.loads(config.read_text())
+            stored = data.get("base_path")
+            if stored:
+                return Path(str(stored)).expanduser()
+        except Exception:
+            # Fall through to default when config cannot be parsed
+            pass
+
+    return Path(DEFAULT_BASE_PATH).expanduser()
+
+
+def save_configured_base_path(path: Path) -> None:
+    """Persist the selected base path for future runs."""
+
+    config = _config_path()
+    payload = {"base_path": str(Path(path).expanduser())}
+    config.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def relocate_storage_directory(source: Path, destination: Path) -> Path:
+    """Move the storage directory (DB + files) to a new absolute path."""
+
+    src = Path(source).expanduser()
+    dest = Path(destination).expanduser()
+
+    if not dest.is_absolute():
+        raise ValueError("Storage path must be an absolute path")
+
+    try:
+        src_resolved = src.resolve()
+    except FileNotFoundError:
+        src_resolved = src
+
+    dest_resolved = dest.resolve() if dest.exists() else dest
+
+    if src_resolved == dest_resolved:
+        ensure_storage(str(dest_resolved))
+        return dest_resolved
+
+    if src.exists():
+        # Prevent moving into or above itself which would create recursion
+        if str(dest_resolved).startswith(str(src_resolved) + os.sep):
+            raise ValueError("Destination cannot be within the current storage directory")
+        if dest.exists():
+            if any(dest.iterdir()):
+                raise ValueError("Destination directory must be empty to adopt storage")
+            dest.rmdir()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    else:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.mkdir(parents=True, exist_ok=True)
+
+    ensure_storage(str(dest))
+    return dest.resolve()
 
 
 def ensure_storage(base_path: str = DEFAULT_BASE_PATH) -> Path:

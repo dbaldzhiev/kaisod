@@ -22,12 +22,24 @@ if __package__ in (None, ""):
 
     from server import crawler, detector  # type: ignore[no-redef]
     from server.downloader import DownloadError, download_item  # type: ignore[no-redef]
-    from server.models import Database, ensure_storage  # type: ignore[no-redef]
+    from server.models import (
+        Database,
+        ensure_storage,
+        load_configured_base_path,
+        relocate_storage_directory,
+        save_configured_base_path,
+    )  # type: ignore[no-redef]
     from server.time_utils import utcnow  # type: ignore[no-redef]
 else:
     from . import crawler, detector
     from .downloader import DownloadError, download_item
-    from .models import Database, ensure_storage
+    from .models import (
+        Database,
+        ensure_storage,
+        load_configured_base_path,
+        relocate_storage_directory,
+        save_configured_base_path,
+    )
     from .time_utils import utcnow
 
 logging.basicConfig(level=logging.INFO)
@@ -39,8 +51,7 @@ INTERVALS = {
     "6d": timedelta(days=6),
 }
 
-DEFAULT_BASE = os.environ.get("KAIS_MONITOR_BASE", "/var/lib/kais-monitor")
-BASE_PATH = ensure_storage(str(DEFAULT_BASE))
+BASE_PATH = ensure_storage(str(load_configured_base_path()))
 DB = Database(base_path=str(BASE_PATH))
 
 ScanCallable = Callable[[], Optional[detector.ScanResult]]
@@ -706,7 +717,13 @@ def create_app() -> Flask:
 
     @app.get("/settings")
     def settings() -> str:
-        return render_template("settings.html", current=SCAN_MANAGER.interval_key)
+        storage_locked = bool(os.environ.get("KAIS_MONITOR_BASE"))
+        return render_template(
+            "settings.html",
+            current=SCAN_MANAGER.interval_key,
+            storage_path=str(DB.base_path),
+            storage_locked=storage_locked,
+        )
 
     @app.post("/settings/interval")
     def update_interval() -> Response:
@@ -716,6 +733,67 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Invalid interval"}), 400
         SCAN_MANAGER.set_interval(value)
         return jsonify({"ok": True})
+
+    @app.post("/settings/storage")
+    def update_storage_path() -> Response:
+        global DB, SCAN_MANAGER, BASE_PATH
+
+        if os.environ.get("KAIS_MONITOR_BASE"):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "Storage path is managed via KAIS_MONITOR_BASE and cannot be changed here.",
+                    }
+                ),
+                400,
+            )
+
+        if SCAN_MANAGER.is_running():
+            return (
+                jsonify({"ok": False, "error": "Cannot change storage while a scan is running."}),
+                400,
+            )
+
+        data = request.get_json(force=True) or {}
+        raw_path = str(data.get("path", "")).strip()
+        if not raw_path:
+            return jsonify({"ok": False, "error": "Storage path is required."}), 400
+
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            return jsonify({"ok": False, "error": "Storage path must be absolute."}), 400
+
+        new_path = candidate.resolve()
+        old_path = DB.base_path.resolve()
+        if new_path == old_path:
+            save_configured_base_path(new_path)
+            return jsonify({"ok": True, "changed": False, "path": str(new_path)})
+
+        try:
+            SCAN_MANAGER.stop()
+        except Exception:
+            logger.exception("Failed to stop scan manager prior to relocating storage")
+
+        DB.close()
+
+        try:
+            relocated = relocate_storage_directory(old_path, new_path)
+        except Exception as exc:
+            logger.exception("Failed to relocate storage to %s", new_path)
+            DB = Database(base_path=str(old_path))
+            BASE_PATH = DB.base_path
+            SCAN_MANAGER = ScanManager(DB)
+            SCAN_MANAGER.start(run_scan)
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        save_configured_base_path(relocated)
+        DB = Database(base_path=str(relocated))
+        BASE_PATH = DB.base_path
+        SCAN_MANAGER = ScanManager(DB)
+        SCAN_MANAGER.start(run_scan)
+
+        return jsonify({"ok": True, "changed": True, "path": str(relocated)})
 
     @app.post("/sections/monitor")
     def section_monitor() -> Response:

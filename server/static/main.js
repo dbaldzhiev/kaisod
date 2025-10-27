@@ -354,6 +354,32 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const saveStorageButton = document.getElementById('save-storage');
+  if (saveStorageButton) {
+    saveStorageButton.addEventListener('click', async () => {
+      const input = document.getElementById('storage-path-input');
+      if (!input) return;
+      const value = input.value.trim();
+      if (!value) {
+        alert('Please provide a storage path.');
+        return;
+      }
+      try {
+        const resp = await postJson('/settings/storage', { path: value });
+        if (!resp?.ok) {
+          const message = resp?.error || 'Failed to update storage path.';
+          alert(message);
+          return;
+        }
+        alert('Storage folder updated. The service will now use the new location.');
+        window.location.reload();
+      } catch (err) {
+        console.error('Failed to update storage path', err);
+        alert(err?.message || 'Failed to update storage path.');
+      }
+    });
+  }
+
   const expandAllButton = document.getElementById('expand-all');
   if (expandAllButton) {
     expandAllButton.addEventListener('click', () => {
