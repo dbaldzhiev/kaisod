@@ -4,19 +4,20 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://kais.cadastre.bg"
 OPEN_DATA_PATH = "/bg/OpenData"
-DATE_FORMATS = [
-    "%d.%m.%Y",
-    "%d.%m.%y",
-]
+READ_ENDPOINT = f"{BASE_URL}{OPEN_DATA_PATH}/Read"
+DOWNLOAD_ENDPOINT = f"{BASE_URL}{OPEN_DATA_PATH}/Download"
+TOKEN_FIELD = "__RequestVerificationToken"
+REQUEST_TIMEOUT = 30
 
 
 @dataclass
@@ -26,89 +27,109 @@ class ScrapedItem:
     date: datetime
     source_url: str
     file_url: Optional[str]
+    path: str
 
 
 def fetch_html(session: Optional[requests.Session] = None) -> str:
     sess = session or requests.Session()
     url = f"{BASE_URL}{OPEN_DATA_PATH}"
-    resp = sess.get(url, timeout=30)
+    resp = sess.get(url, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     return resp.text
 
 
-def parse_date(text: str) -> datetime:
-    cleaned = text.strip().replace("\xa0", " ")
-    if cleaned.lower().startswith("на "):
-        cleaned = cleaned[3:].strip()
-    if cleaned.endswith(" г.") or cleaned.endswith(" г"):
-        cleaned = cleaned[: -3].strip()
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(cleaned, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f"Unable to parse date: {text}")
-
-
-def extract_items(html: str) -> List[ScrapedItem]:
+def _extract_token(html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table")
-    if not table:
-        raise ValueError("Could not find data table on page")
+    token_input = soup.find("input", {"name": TOKEN_FIELD})
+    if not token_input or not token_input.get("value"):
+        raise ValueError("Could not locate verification token on page")
+    return token_input["value"].strip()
 
+
+def _request_listing(session: requests.Session, token: str, path: str) -> List[Dict[str, object]]:
+    data: Dict[str, object] = {TOKEN_FIELD: token, "path": path or "/"}
+    if data["path"] != "/":
+        data["target"] = data["path"]
+    resp = session.post(READ_ENDPOINT, data=data, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    try:
+        payload = resp.json()
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise ValueError("Received invalid JSON from listing endpoint") from exc
+
+    if isinstance(payload, dict):
+        for key in ("data", "Data"):
+            if key in payload and isinstance(payload[key], list):
+                return payload[key]
+        raise ValueError("Unexpected payload structure from listing endpoint")
+    if isinstance(payload, list):
+        return payload
+    raise ValueError("Unexpected payload type from listing endpoint")
+
+
+def _iter_file_entries(session: requests.Session, token: str) -> Iterable[Dict[str, object]]:
+    stack: List[str] = ["/"]
+    visited: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        entries = _request_listing(session, token, current)
+        for entry in entries:
+            path = entry.get("Path")
+            if not isinstance(path, str) or not path:
+                continue
+            if entry.get("IsDirectory"):
+                stack.append(path)
+                continue
+            yield entry
+
+
+def _build_item(entry: Dict[str, object]) -> ScrapedItem:
+    path = str(entry["Path"])
+    raw_timestamp = entry.get("Modified") or entry.get("Created")
+    if not isinstance(raw_timestamp, str):
+        raw_timestamp = entry.get("ModifiedUtc") or entry.get("CreatedUtc")
+    if not isinstance(raw_timestamp, str):
+        raise ValueError(f"Missing timestamp for entry {path}")
+    try:
+        observed = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Unable to parse timestamp '{raw_timestamp}' for {path}") from exc
+
+    title = path.replace("/", " / ")
+    date_text = observed.strftime("%d.%m.%Y %H:%M")
+    download_url = f"{DOWNLOAD_ENDPOINT}?path={quote(path, safe='/()')}"
+
+    return ScrapedItem(
+        title=title,
+        date_text=date_text,
+        date=observed,
+        source_url=f"{BASE_URL}{OPEN_DATA_PATH}",
+        file_url=download_url,
+        path=path,
+    )
+
+
+def extract_items(html: str, session: requests.Session) -> List[ScrapedItem]:
+    token = _extract_token(html)
     items: List[ScrapedItem] = []
-    for row in table.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 3:
-            continue
-        title_cell = cells[0]
-        date_cell = cells[1]
-        link_cell = cells[2]
-
-        title = " ".join(title_cell.get_text(strip=True).split())
-        date_text = date_cell.get_text(strip=True)
-        if not title or not date_text:
-            continue
+    for entry in _iter_file_entries(session, token):
         try:
-            date_value = parse_date(date_text)
+            item = _build_item(entry)
         except ValueError as exc:
-            logger.warning("Skipping row with unparsable date %s: %s", date_text, exc)
+            logger.warning("Skipping entry %s: %s", entry.get("Path"), exc)
             continue
-
-        link = link_cell.find("a")
-        file_url: Optional[str] = None
-        if link and link.get("href"):
-            href = link["href"].strip()
-            if href.startswith("http"):
-                file_url = href
-            else:
-                file_url = f"{BASE_URL}{href}" if href.startswith("/") else f"{BASE_URL}/{href}"
-
-        source_link = title_cell.find("a")
-        if source_link and source_link.get("href"):
-            href = source_link["href"].strip()
-            if href.startswith("http"):
-                source_url = href
-            else:
-                source_url = f"{BASE_URL}{href}" if href.startswith("/") else f"{BASE_URL}/{href}"
-        else:
-            source_url = f"{BASE_URL}{OPEN_DATA_PATH}"
-
-        items.append(
-            ScrapedItem(
-                title=title,
-                date_text=date_text,
-                date=date_value,
-                source_url=source_url,
-                file_url=file_url,
-            )
-        )
+        items.append(item)
+    items.sort(key=lambda item: item.title)
     return items
 
 
 def fetch_items(session: Optional[requests.Session] = None) -> List[ScrapedItem]:
-    html = fetch_html(session=session)
-    return extract_items(html)
+    sess = session or requests.Session()
+    html = fetch_html(session=sess)
+    return extract_items(html, sess)
 
 
 def serialize(item: ScrapedItem) -> dict:
@@ -118,4 +139,5 @@ def serialize(item: ScrapedItem) -> dict:
         "date_iso": item.date.isoformat(),
         "source_url": item.source_url,
         "file_url": item.file_url,
+        "path": item.path,
     }

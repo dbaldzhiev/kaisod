@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Optional
 
 from . import models
 from .crawler import ScrapedItem
+from .time_utils import utcnow
 
 
 class ScanResult:
@@ -28,7 +29,7 @@ class ScanResult:
 
 def process_scan(db: models.Database, scraped_items: Iterable[ScrapedItem], now: Optional[datetime] = None) -> ScanResult:
     """Apply detection rules against the database."""
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     result = ScanResult()
 
     for item in scraped_items:

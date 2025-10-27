@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import requests
 
 from .models import Database, ensure_storage
+from .time_utils import utcnow
 
 
 class DownloadError(Exception):
@@ -50,6 +50,6 @@ def download_item(
 
     sha256 = compute_sha256(file_path)
     size = file_path.stat().st_size
-    now = datetime.utcnow()
+    now = utcnow()
     download_id = db.record_download(item_id, str(file_path), sha256, size, now)
     return download_id

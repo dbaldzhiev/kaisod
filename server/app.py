@@ -21,10 +21,12 @@ if __package__ in (None, ""):
     from server import crawler, detector  # type: ignore[no-redef]
     from server.downloader import DownloadError, download_item  # type: ignore[no-redef]
     from server.models import Database, ensure_storage  # type: ignore[no-redef]
+    from server.time_utils import utcnow  # type: ignore[no-redef]
 else:
     from . import crawler, detector
     from .downloader import DownloadError, download_item
     from .models import Database, ensure_storage
+    from .time_utils import utcnow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,7 +58,7 @@ class ScanManager:
         self._callback = callback
         if self.thread and self.thread.is_alive():
             return
-        self.schedule_next(datetime.utcnow())
+        self.schedule_next(utcnow())
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
@@ -70,11 +72,11 @@ class ScanManager:
             self.interval_key = key
             self.interval = INTERVALS[key]
             self.db.set_setting("scan_interval", key)
-            self.schedule_next(datetime.utcnow())
+            self.schedule_next(utcnow())
 
     def schedule_next(self, base_time: Optional[datetime] = None) -> None:
         with self.lock:
-            base = base_time or datetime.utcnow()
+            base = base_time or utcnow()
             self.next_scan_at = base + self.interval
 
     def _run(self) -> None:
@@ -84,7 +86,7 @@ class ScanManager:
             if next_time is None:
                 self.schedule_next()
                 continue
-            wait = max(0, (next_time - datetime.utcnow()).total_seconds())
+            wait = max(0, (next_time - utcnow()).total_seconds())
             if self.stop_event.wait(wait):
                 break
             self._execute_scan()
@@ -104,7 +106,7 @@ SCAN_MANAGER = ScanManager(DB)
 
 
 def run_scan() -> detector.ScanResult:
-    now = datetime.utcnow()
+    now = utcnow()
     try:
         scraped = crawler.fetch_items()
     except Exception as exc:
