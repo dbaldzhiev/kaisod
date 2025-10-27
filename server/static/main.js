@@ -155,6 +155,43 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  const persistCollapseState = () => {
+    try {
+      if (Object.keys(collapseState).length === 0) {
+        localStorage.removeItem(collapseStorageKey);
+      } else {
+        localStorage.setItem(collapseStorageKey, JSON.stringify(collapseState));
+      }
+    } catch (err) {
+      console.warn('Unable to persist collapse state', err);
+    }
+  };
+
+  const rememberNodeCollapse = (node, collapsed, persist = false) => {
+    setNodeCollapse(node, collapsed);
+    const path = node.dataset.path;
+    if (path) {
+      if (collapsed) {
+        collapseState[path] = true;
+      } else {
+        delete collapseState[path];
+      }
+      if (persist) {
+        persistCollapseState();
+      }
+    }
+  };
+
+  const expandAncestors = (node) => {
+    let current = node?.parentElement?.closest('.tree-node.directory');
+    while (current) {
+      if (current.classList.contains('collapsed')) {
+        rememberNodeCollapse(current, false);
+      }
+      current = current.parentElement?.closest('.tree-node.directory');
+    }
+  };
+
   document.querySelectorAll('.tree-node.directory').forEach((node) => {
     const path = node.dataset.path;
     const button = node.querySelector('.collapse-toggle');
@@ -163,19 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setNodeCollapse(node, Boolean(initial));
     button.addEventListener('click', () => {
       const collapsed = !node.classList.contains('collapsed');
-      setNodeCollapse(node, collapsed);
-      if (path) {
-        if (collapsed) {
-          collapseState[path] = true;
-        } else {
-          delete collapseState[path];
-        }
-        try {
-          localStorage.setItem(collapseStorageKey, JSON.stringify(collapseState));
-        } catch (err) {
-          console.warn('Unable to persist collapse state', err);
-        }
-      }
+      rememberNodeCollapse(node, collapsed, true);
     });
   });
 
@@ -223,6 +248,83 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {
         alert('Failed to update interval');
       }
+    });
+  }
+
+  const expandAllButton = document.getElementById('expand-all');
+  if (expandAllButton) {
+    expandAllButton.addEventListener('click', () => {
+      collapseState = {};
+      document.querySelectorAll('.tree-node.directory').forEach((node) => {
+        rememberNodeCollapse(node, false);
+      });
+      persistCollapseState();
+    });
+  }
+
+  const collapseAllButton = document.getElementById('collapse-all');
+  if (collapseAllButton) {
+    collapseAllButton.addEventListener('click', () => {
+      collapseState = {};
+      document.querySelectorAll('.tree-node.directory').forEach((node) => {
+        rememberNodeCollapse(node, true);
+      });
+      persistCollapseState();
+    });
+  }
+
+  const expandDirectoriesByAttr = (attr) => {
+    let changed = false;
+    document.querySelectorAll('.tree-node.directory').forEach((node) => {
+      const value = Number(node.dataset[attr] || '0');
+      if (value > 0) {
+        rememberNodeCollapse(node, false);
+        expandAncestors(node);
+        changed = true;
+      }
+    });
+    if (changed) {
+      persistCollapseState();
+    }
+  };
+
+  const expandFilesBySyncState = (states) => {
+    let changed = false;
+    document.querySelectorAll('.tree-node.file').forEach((node) => {
+      const state = node.dataset.syncState;
+      if (states.includes(state)) {
+        expandAncestors(node);
+        changed = true;
+      }
+    });
+    if (changed) {
+      persistCollapseState();
+    }
+  };
+
+  const expandMonitoredButton = document.getElementById('expand-monitored');
+  if (expandMonitoredButton) {
+    expandMonitoredButton.addEventListener('click', () => {
+      expandDirectoriesByAttr('monitoredCount');
+    });
+  }
+
+  const expandUnsyncedButton = document.getElementById('expand-unsynced');
+  if (expandUnsyncedButton) {
+    expandUnsyncedButton.addEventListener('click', () => {
+      expandDirectoriesByAttr('unsyncedCount');
+      expandFilesBySyncState(['missing', 'outdated']);
+    });
+  }
+
+  const resetTreeStateButton = document.getElementById('reset-tree-state');
+  if (resetTreeStateButton) {
+    resetTreeStateButton.addEventListener('click', () => {
+      collapseState = {};
+      localStorage.removeItem(collapseStorageKey);
+      document.querySelectorAll('.tree-node.directory').forEach((node) => {
+        rememberNodeCollapse(node, false);
+      });
     });
   }
 

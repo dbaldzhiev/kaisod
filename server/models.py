@@ -80,7 +80,8 @@ class Database:
                     file_path TEXT NOT NULL,
                     sha256 TEXT,
                     size INTEGER,
-                    downloaded_at TEXT NOT NULL
+                    downloaded_at TEXT NOT NULL,
+                    observed_date_in_table TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS settings (
@@ -109,6 +110,12 @@ class Database:
                     title = row["title"] or ""
                     path_guess = title.replace(" / ", "/")
                     cur.execute("UPDATE items SET path = ? WHERE id = ?", (path_guess, row["id"]))
+                self._conn.commit()
+
+            cur.execute("PRAGMA table_info(downloads)")
+            download_columns = {row[1] for row in cur.fetchall()}
+            if "observed_date_in_table" not in download_columns:
+                cur.execute("ALTER TABLE downloads ADD COLUMN observed_date_in_table TEXT")
                 self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -261,7 +268,31 @@ class Database:
         where = ""
         if clauses:
             where = "WHERE " + " AND ".join(clauses)
-        query = f"SELECT * FROM items {where} ORDER BY COALESCE(datetime(last_seen_at), datetime('1970-01-01T00:00:00')) DESC, title"
+        query = f"""
+            SELECT
+                items.*,
+                latest.file_path AS last_download_path,
+                latest.downloaded_at AS last_downloaded_at,
+                latest.observed_date_in_table AS last_download_observed_date
+            FROM items
+            LEFT JOIN (
+                SELECT d.item_id,
+                       d.file_path,
+                       d.downloaded_at,
+                       d.observed_date_in_table
+                FROM downloads AS d
+                INNER JOIN (
+                    SELECT item_id, MAX(datetime(downloaded_at)) AS max_downloaded_at
+                    FROM downloads
+                    GROUP BY item_id
+                ) AS latest_meta
+                ON latest_meta.item_id = d.item_id
+                AND datetime(d.downloaded_at) = latest_meta.max_downloaded_at
+            ) AS latest
+            ON latest.item_id = items.id
+            {where}
+            ORDER BY COALESCE(datetime(items.last_seen_at), datetime('1970-01-01T00:00:00')) DESC, items.title
+        """
         with self.cursor() as cur:
             cur.execute(query, params)
             return cur.fetchall()
@@ -291,14 +322,22 @@ class Database:
             )
             return cur.fetchall()
 
-    def record_download(self, item_id: int, file_path: str, sha256: Optional[str], size: int, now: datetime) -> int:
+    def record_download(
+        self,
+        item_id: int,
+        file_path: str,
+        sha256: Optional[str],
+        size: int,
+        now: datetime,
+        observed_date: Optional[str],
+    ) -> int:
         with self.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO downloads(item_id, file_path, sha256, size, downloaded_at)
-                VALUES(?, ?, ?, ?, ?)
+                INSERT INTO downloads(item_id, file_path, sha256, size, downloaded_at, observed_date_in_table)
+                VALUES(?, ?, ?, ?, ?, ?)
                 """,
-                (item_id, file_path, sha256, size, now.strftime(ISO_FORMAT)),
+                (item_id, file_path, sha256, size, now.strftime(ISO_FORMAT), observed_date),
             )
             self._conn.commit()
             return int(cur.lastrowid)

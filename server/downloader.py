@@ -58,7 +58,7 @@ def download_item(
     sha256 = compute_sha256(file_path)
     size = file_path.stat().st_size
     now = utcnow()
-    download_id = db.record_download(item_id, str(file_path), sha256, size, now)
+    download_id = db.record_download(item_id, str(file_path), sha256, size, now, observed_date)
 
     if zipfile.is_zipfile(file_path):
         extract_dir = item_dir / "latest"

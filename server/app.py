@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import threading
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional
@@ -69,20 +70,33 @@ def compute_stats(node: "TreeNode") -> None:
         node.ignored = 1 if ignored else 0
         node.monitor_state = "all" if monitored else "none"
         node.ignore_state = "all" if ignored else "none"
+        sync_state = node.item.get("sync_state") if node.item else None
+        node.synced = 1 if sync_state == "synced" else 0
+        node.outdated = 1 if sync_state == "outdated" else 0
+        node.missing = 1 if sync_state in {"missing", "missing-file"} else 0
         return
 
     total = 0
     monitored_total = 0
     ignored_total = 0
+    synced_total = 0
+    outdated_total = 0
+    missing_total = 0
     for child in node.children.values():
         compute_stats(child)
         total += child.total
         monitored_total += child.monitored
         ignored_total += child.ignored
+        synced_total += child.synced
+        outdated_total += child.outdated
+        missing_total += child.missing
 
     node.total = total
     node.monitored = monitored_total
     node.ignored = ignored_total
+    node.synced = synced_total
+    node.outdated = outdated_total
+    node.missing = missing_total
     if total <= 0:
         node.monitor_state = "none"
         node.ignore_state = "none"
@@ -154,12 +168,75 @@ class TreeNode:
     ignored: int = 0
     monitor_state: str = "none"
     ignore_state: str = "none"
+    synced: int = 0
+    outdated: int = 0
+    missing: int = 0
 
     def sorted_children(self) -> List["TreeNode"]:
         return sorted(
             self.children.values(),
             key=lambda node: (0 if node.node_type == "directory" else 1, node.name.lower()),
         )
+
+    @property
+    def unsynced(self) -> int:
+        return self.outdated + self.missing
+
+
+def annotate_item(entry: dict, base_path: Path) -> None:
+    """Enrich an item row with local storage metadata and sync state."""
+
+    entry["monitored"] = bool(entry.get("monitored"))
+    entry["ignored"] = bool(entry.get("ignored"))
+
+    last_download_at = entry.get("last_downloaded_at")
+    if isinstance(last_download_at, datetime):
+        entry["last_downloaded_at"] = last_download_at.isoformat()
+    elif last_download_at is not None:
+        entry["last_downloaded_at"] = str(last_download_at)
+
+    last_observed = entry.get("last_download_observed_date")
+    if isinstance(last_observed, datetime):
+        entry["last_download_observed_date"] = last_observed.isoformat()
+    elif last_observed is not None:
+        entry["last_download_observed_date"] = str(last_observed)
+
+    local_root = base_path / str(entry.get("id"))
+    latest_extract = local_root / "latest"
+    entry["local_root"] = str(local_root)
+    entry["latest_extract_path"] = str(latest_extract)
+    entry["latest_extract_exists"] = latest_extract.exists()
+
+    last_download_path = entry.get("last_download_path")
+    download_exists = bool(last_download_path and Path(str(last_download_path)).exists())
+    entry["last_download_exists"] = download_exists
+
+    has_local_files = download_exists or entry["latest_extract_exists"]
+    entry["has_local_files"] = has_local_files
+
+    monitored = entry["monitored"]
+    last_seen = entry.get("last_seen_date")
+    observed_download = entry.get("last_download_observed_date")
+
+    if not monitored:
+        state = "not-monitored"
+        label = "Not monitored"
+    elif not has_local_files or not entry.get("last_downloaded_at"):
+        state = "missing"
+        label = "Not downloaded"
+    else:
+        if observed_download and last_seen and str(observed_download) < str(last_seen):
+            state = "outdated"
+            label = "Needs sync"
+        elif observed_download is None and last_seen:
+            state = "outdated"
+            label = "Needs sync"
+        else:
+            state = "synced"
+            label = "Up to date"
+
+    entry["sync_state"] = state
+    entry["sync_label"] = label
 
 
 class ScanManager:
@@ -474,8 +551,7 @@ def create_app() -> Flask:
         rows = DB.get_items(monitored=monitored_flag, status=status)
         row_dicts = [dict(row) for row in rows]
         for entry in row_dicts:
-            entry["monitored"] = bool(entry.get("monitored"))
-            entry["ignored"] = bool(entry.get("ignored"))
+            annotate_item(entry, DB.base_path)
         tree_root = build_tree(row_dicts)
         return render_template(
             "items.html",
@@ -483,6 +559,7 @@ def create_app() -> Flask:
             tree=tree_root,
             monitored_filter=monitored,
             status_filter=status,
+            storage_root=str(DB.base_path),
         )
 
     @app.route("/monitored")
@@ -490,9 +567,8 @@ def create_app() -> Flask:
         rows = DB.get_items(monitored=True)
         items = [dict(row) for row in rows]
         for entry in items:
-            entry["monitored"] = bool(entry.get("monitored"))
-            entry["ignored"] = bool(entry.get("ignored"))
-        return render_template("monitored.html", items=items)
+            annotate_item(entry, DB.base_path)
+        return render_template("monitored.html", items=items, storage_root=str(DB.base_path))
 
     @app.post("/items/<int:item_id>/monitor")
     def toggle_monitor(item_id: int) -> Response:

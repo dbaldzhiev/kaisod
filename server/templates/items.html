@@ -3,7 +3,13 @@
   <li
     class="tree-node {{ node.node_type }}"
     data-path="{{ node.path }}"
-    {% if node.node_type == 'file' %}data-item-id="{{ node.item.id }}"{% endif %}
+    {% if node.node_type == 'directory' %}
+      data-monitored-count="{{ node.monitored }}"
+      data-unsynced-count="{{ node.unsynced }}"
+    {% else %}
+      data-item-id="{{ node.item.id }}"
+      data-sync-state="{{ node.item.sync_state }}"
+    {% endif %}
   >
     <div class="tree-row">
       <div class="tree-collapse">
@@ -22,10 +28,28 @@
       <div class="tree-info">
         <span class="node-name">{{ node.name }}</span>
         {% if node.node_type == 'directory' %}
-          <span class="node-count">{{ node.total }} items</span>
+          <span class="node-count">
+            {{ node.total }} items
+            {% if node.monitored %}
+              · {{ node.monitored }} monitored
+            {% endif %}
+            {% if node.unsynced %}
+              · <span class="node-unsynced">{{ node.unsynced }} need sync</span>
+            {% endif %}
+          </span>
         {% else %}
           <span class="node-date">{{ node.item.last_seen_date | format_datetime }}</span>
           <span class="node-status {{ node.item.status }}">{{ node.item.status }}</span>
+          <span class="node-sync sync-{{ node.item.sync_state }}">{{ node.item.sync_label }}</span>
+          {% if node.item.last_downloaded_at %}
+            <span class="node-download">Downloaded {{ node.item.last_downloaded_at | format_datetime }}</span>
+          {% endif %}
+          <span class="node-local" title="Latest extracted files: {{ node.item.latest_extract_path }}">
+            Latest folder: <code>{{ node.item.latest_extract_path }}</code>
+            {% if not node.item.latest_extract_exists %}
+              <span class="local-missing">missing</span>
+            {% endif %}
+          </span>
         {% endif %}
       </div>
       <div class="tree-controls">
@@ -86,8 +110,31 @@
   </form>
 </section>
 
+<section class="storage-info">
+  <h2>Storage layout</h2>
+  <p>
+    Downloads are saved under <code>{{ storage_root }}</code>.
+    Each item uses <code>{{ storage_root }}/&lt;item-id&gt;/</code> with the current extraction in
+    <code>latest/</code> and dated archives kept separately.
+  </p>
+</section>
+
 <section class="items-tree">
   <h2>Open data tree</h2>
+  <div class="tree-toolbar">
+    <div class="tree-tools">
+      <button type="button" id="expand-all">Expand all</button>
+      <button type="button" id="collapse-all">Collapse all</button>
+      <button type="button" id="expand-monitored">Expand monitored</button>
+      <button type="button" id="expand-unsynced">Expand needing sync</button>
+      <button type="button" id="reset-tree-state" class="link-button">Reset view</button>
+    </div>
+    <div class="tree-legend">
+      <span><span class="legend-pill sync-synced"></span> Up to date</span>
+      <span><span class="legend-pill sync-outdated"></span> Needs sync</span>
+      <span><span class="legend-pill sync-missing"></span> Not downloaded</span>
+    </div>
+  </div>
   {% if tree.children %}
     <ul class="tree-root">
       {% for child in tree.sorted_children() %}
