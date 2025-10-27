@@ -14,13 +14,13 @@ if __package__ in (None, ""):
     import sys
 
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    if CURRENT_DIR not in sys.path:
-        sys.path.insert(0, CURRENT_DIR)
+    PARENT_DIR = os.path.dirname(CURRENT_DIR)
+    if PARENT_DIR not in sys.path:
+        sys.path.insert(0, PARENT_DIR)
 
-    import crawler  # type: ignore[no-redef]
-    import detector  # type: ignore[no-redef]
-    from downloader import DownloadError, download_item  # type: ignore[no-redef]
-    from models import Database, ensure_storage  # type: ignore[no-redef]
+    from server import crawler, detector  # type: ignore[no-redef]
+    from server.downloader import DownloadError, download_item  # type: ignore[no-redef]
+    from server.models import Database, ensure_storage  # type: ignore[no-redef]
 else:
     from . import crawler, detector
     from .downloader import DownloadError, download_item
