@@ -1,7 +1,7 @@
 """Detection logic for new or updated items."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional
 
 from . import models
@@ -34,27 +34,31 @@ def process_scan(db: models.Database, scraped_items: Iterable[ScrapedItem], now:
 
     for item in scraped_items:
         row = db.get_item_by_identity(item.title, item.file_url)
-        observed_date = item.date.date().isoformat()
+        observed_dt = item.date
+        if observed_dt.tzinfo is not None:
+            observed_dt = observed_dt.astimezone(timezone.utc).replace(tzinfo=None)
+        observed_date = observed_dt.isoformat(timespec="seconds")
         if row is None:
             item_id = db.create_item(
                 title=item.title,
                 source_url=item.source_url,
                 file_url=item.file_url,
+                path=item.path,
                 observed_date=observed_date,
                 now=now,
             )
             db.add_event(item_id, "NEW", observed_date, now)
-            db.update_item_seen(item_id, observed_date, now, "new")
+            db.update_item_seen(item_id, observed_date, now, "new", path=item.path)
             result.new_items.append(item_id)
             continue
 
         last_seen_date = row["last_seen_date"]
         if last_seen_date is None or observed_date > last_seen_date:
             db.add_event(int(row["id"]), "UPDATED", observed_date, now)
-            db.update_item_seen(int(row["id"]), observed_date, now, "updated")
+            db.update_item_seen(int(row["id"]), observed_date, now, "updated", path=item.path)
             result.updated_items.append(int(row["id"]))
         else:
-            db.update_item_seen(int(row["id"]), last_seen_date, now, "seen")
+            db.update_item_seen(int(row["id"]), last_seen_date, now, "seen", path=item.path)
             result.unchanged_items.append(int(row["id"]))
 
     return result

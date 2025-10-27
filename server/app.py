@@ -5,8 +5,9 @@ import json
 import logging
 import os
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -41,20 +42,148 @@ DEFAULT_BASE = os.environ.get("KAIS_MONITOR_BASE", "/var/lib/kais-monitor")
 BASE_PATH = ensure_storage(str(DEFAULT_BASE))
 DB = Database(base_path=str(BASE_PATH))
 
+ScanCallable = Callable[[], Optional[detector.ScanResult]]
+
+
+def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
+def normalize_path(raw_path: Optional[str], title: str) -> str:
+    candidate = (raw_path or "").strip()
+    if not candidate:
+        candidate = title.replace(" / ", "/")
+    if not candidate.startswith("/"):
+        candidate = "/" + candidate.lstrip("/")
+    return candidate.rstrip("/") or "/"
+
+
+def compute_stats(node: "TreeNode") -> None:
+    if node.node_type == "file":
+        node.total = 1
+        monitored = bool(node.item and node.item.get("monitored"))
+        ignored = bool(node.item and node.item.get("ignored"))
+        node.monitored = 1 if monitored else 0
+        node.ignored = 1 if ignored else 0
+        node.monitor_state = "all" if monitored else "none"
+        node.ignore_state = "all" if ignored else "none"
+        return
+
+    total = 0
+    monitored_total = 0
+    ignored_total = 0
+    for child in node.children.values():
+        compute_stats(child)
+        total += child.total
+        monitored_total += child.monitored
+        ignored_total += child.ignored
+
+    node.total = total
+    node.monitored = monitored_total
+    node.ignored = ignored_total
+    if total <= 0:
+        node.monitor_state = "none"
+        node.ignore_state = "none"
+        return
+    if monitored_total == total:
+        node.monitor_state = "all"
+    elif monitored_total == 0:
+        node.monitor_state = "none"
+    else:
+        node.monitor_state = "partial"
+
+    if ignored_total == total:
+        node.ignore_state = "all"
+    elif ignored_total == 0:
+        node.ignore_state = "none"
+    else:
+        node.ignore_state = "partial"
+
+
+def prune_empty(node: "TreeNode") -> None:
+    for key, child in list(node.children.items()):
+        if child.node_type == "directory":
+            prune_empty(child)
+            if child.total == 0:
+                del node.children[key]
+
+
+def build_tree(rows: List[dict]) -> "TreeNode":
+    root = TreeNode(name="root", path="/", node_type="directory")
+    for row in rows:
+        title = row.get("title", "")
+        normalized = normalize_path(row.get("path"), title)
+        segments = [segment for segment in normalized.split("/") if segment]
+        if not segments:
+            continue
+        node = root
+        current_path = ""
+        for index, segment in enumerate(segments):
+            current_path = f"{current_path}/{segment}" if current_path else f"/{segment}"
+            if index == len(segments) - 1:
+                node.children[segment] = TreeNode(
+                    name=segment,
+                    path=current_path,
+                    node_type="file",
+                    item=row,
+                )
+            else:
+                if segment not in node.children:
+                    node.children[segment] = TreeNode(
+                        name=segment,
+                        path=current_path,
+                        node_type="directory",
+                    )
+                node = node.children[segment]
+    compute_stats(root)
+    prune_empty(root)
+    return root
+
+
+@dataclass
+class TreeNode:
+    name: str
+    path: str
+    node_type: str  # "directory" or "file"
+    item: Optional[dict] = None
+    children: Dict[str, "TreeNode"] = field(default_factory=dict)
+    total: int = 0
+    monitored: int = 0
+    ignored: int = 0
+    monitor_state: str = "none"
+    ignore_state: str = "none"
+
+    def sorted_children(self) -> List["TreeNode"]:
+        return sorted(
+            self.children.values(),
+            key=lambda node: (0 if node.node_type == "directory" else 1, node.name.lower()),
+        )
+
 
 class ScanManager:
     def __init__(self, db: Database) -> None:
         self.db = db
         self.interval_key = db.get_setting("scan_interval", "6h") or "6h"
         self.interval = INTERVALS.get(self.interval_key, INTERVALS["6h"])
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.last_scan_at: Optional[datetime] = None
         self.next_scan_at: Optional[datetime] = None
-        self._callback: Optional[Callable[[], detector.ScanResult]] = None
+        self._callback: Optional[ScanCallable] = None
+        self._is_running = False
+        self.progress: Dict[str, Optional[object]] = {
+            "stage": "idle",
+            "message": "Idle",
+            "current_path": None,
+            "processed": 0,
+            "total": 0,
+        }
+        self.last_result: Optional[Dict[str, int]] = None
 
-    def start(self, callback: Callable[[], detector.ScanResult]) -> None:
+    def start(self, callback: ScanCallable) -> None:
         self._callback = callback
         if self.thread and self.thread.is_alive():
             return
@@ -79,6 +208,106 @@ class ScanManager:
             base = base_time or utcnow()
             self.next_scan_at = base + self.interval
 
+    def begin_scan(self) -> bool:
+        with self.lock:
+            if self._is_running:
+                return False
+            self._is_running = True
+            self.progress.update(
+                {
+                    "stage": "starting",
+                    "message": "Starting scan",
+                    "current_path": None,
+                    "processed": 0,
+                    "total": 0,
+                }
+            )
+            return True
+
+    def complete_scan(self, finished_at: datetime, summary: Dict[str, int]) -> None:
+        with self.lock:
+            self.last_scan_at = finished_at
+            self.last_result = summary
+            self.schedule_next(finished_at)
+            self.progress.update(
+                {
+                    "stage": "idle",
+                    "message": "Idle",
+                    "current_path": None,
+                    "processed": 0,
+                    "total": 0,
+                }
+            )
+            self._is_running = False
+
+    def update_progress(
+        self,
+        *,
+        stage: Optional[str] = None,
+        message: Optional[str] = None,
+        current_path: Optional[str] = None,
+        processed: Optional[int] = None,
+        total: Optional[int] = None,
+    ) -> None:
+        with self.lock:
+            if stage is not None:
+                self.progress["stage"] = stage
+            if message is not None:
+                self.progress["message"] = message
+            if current_path is not None:
+                self.progress["current_path"] = current_path
+            if processed is not None:
+                self.progress["processed"] = processed
+            if total is not None:
+                self.progress["total"] = total
+
+    def crawler_progress(self, stage: str, payload: Dict[str, object]) -> None:
+        if stage == "start":
+            self.update_progress(stage="fetch", message=str(payload.get("message")))
+        elif stage == "token":
+            self.update_progress(stage="fetch", message=str(payload.get("message")))
+        elif stage == "listing":
+            path = payload.get("path") or "/"
+            entries = payload.get("entries")
+            message = f"Listing {path} ({entries} entries)"
+            self.update_progress(stage="listing", message=message, current_path=str(path))
+        elif stage == "file":
+            path = payload.get("path") or ""
+            count = int(payload.get("count", 0))
+            message = f"Parsed {count} files"
+            self.update_progress(
+                stage="parsing",
+                message=message,
+                current_path=str(path),
+                processed=count,
+                total=count,
+            )
+
+    def is_running(self) -> bool:
+        with self.lock:
+            return self._is_running
+
+    def get_status(self) -> Dict[str, object]:
+        with self.lock:
+            return {
+                "status": "running" if self._is_running else "idle",
+                "last_scan_at": self.last_scan_at,
+                "next_scan_at": self.next_scan_at,
+                "progress": dict(self.progress),
+                "last_result": self.last_result,
+            }
+
+    def trigger_manual(self, callback: ScanCallable) -> bool:
+        if self.is_running():
+            return False
+
+        def _runner() -> None:
+            callback()
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        return True
+
     def _run(self) -> None:
         while not self.stop_event.is_set():
             with self.lock:
@@ -96,7 +325,7 @@ class ScanManager:
             return
         try:
             result = self._callback()
-            if result.errors:
+            if result and result.errors:
                 logger.error("Scan completed with errors: %s", result.errors)
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Scheduled scan failed: %s", exc)
@@ -105,32 +334,94 @@ class ScanManager:
 SCAN_MANAGER = ScanManager(DB)
 
 
-def run_scan() -> detector.ScanResult:
-    now = utcnow()
-    try:
-        scraped = crawler.fetch_items()
-    except Exception as exc:
-        logger.exception("Failed to fetch items: %s", exc)
-        result = detector.ScanResult()
-        result.errors.append(str(exc))
-        SCAN_MANAGER.last_scan_at = now
-        SCAN_MANAGER.schedule_next(now)
-        return result
+def run_scan() -> Optional[detector.ScanResult]:
+    if not SCAN_MANAGER.begin_scan():
+        logger.info("Scan requested while another is running; skipping")
+        return None
 
-    result = detector.process_scan(DB, scraped, now=now)
-    for item_id in result.new_items + result.updated_items:
-        row = DB.get_item(item_id)
-        if not row:
-            continue
-        if not row["file_url"] or not row["monitored"] or row["ignored"]:
-            continue
+    now = utcnow()
+    result = detector.ScanResult()
+    scraped: List[crawler.ScrapedItem] = []
+
+    try:
         try:
-            download_item(DB, item_id, row["file_url"], row["last_seen_date"])
-        except DownloadError as exc:
-            logger.error("Download failed for item %s: %s", item_id, exc)
+            scraped = crawler.fetch_items(progress=SCAN_MANAGER.crawler_progress)
+        except Exception as exc:
+            logger.exception("Failed to fetch items: %s", exc)
             result.errors.append(str(exc))
-    SCAN_MANAGER.last_scan_at = now
-    SCAN_MANAGER.schedule_next(now)
+            SCAN_MANAGER.update_progress(
+                stage="error",
+                message=f"Fetch failed: {exc}",
+            )
+        else:
+            total_scraped = len(scraped)
+            SCAN_MANAGER.update_progress(
+                stage="processing",
+                message=f"Processing {total_scraped} entries",
+                processed=0,
+                total=total_scraped,
+                current_path=None,
+            )
+            result = detector.process_scan(DB, scraped, now=now)
+            SCAN_MANAGER.update_progress(
+                stage="processing",
+                message=(
+                    f"Detected {len(result.new_items)} new / {len(result.updated_items)} updated entries"
+                ),
+                processed=total_scraped,
+                total=total_scraped,
+                current_path=None,
+            )
+
+            downloads = [
+                item_id
+                for item_id in result.new_items + result.updated_items
+                if item_id is not None
+            ]
+            total_downloads = len(downloads)
+            if total_downloads:
+                for index, item_id in enumerate(downloads, start=1):
+                    row = DB.get_item(item_id)
+                    if not row:
+                        continue
+                    if not row["file_url"] or not row["monitored"] or row["ignored"]:
+                        continue
+                    path = row["path"] or row["title"]
+                    SCAN_MANAGER.update_progress(
+                        stage="downloading",
+                        message=f"Downloading {path}",
+                        processed=index,
+                        total=total_downloads,
+                        current_path=path,
+                    )
+                    try:
+                        download_item(DB, item_id, row["file_url"], row["last_seen_date"])
+                    except DownloadError as exc:
+                        logger.error("Download failed for item %s: %s", item_id, exc)
+                        result.errors.append(str(exc))
+                SCAN_MANAGER.update_progress(
+                    stage="downloading",
+                    message="Downloads complete",
+                    processed=total_downloads,
+                    total=total_downloads,
+                    current_path=None,
+                )
+            else:
+                SCAN_MANAGER.update_progress(
+                    stage="processing",
+                    message="No monitored changes detected",
+                    processed=total_scraped,
+                    total=total_scraped,
+                    current_path=None,
+                )
+    finally:
+        summary = {
+            "new": len(result.new_items),
+            "updated": len(result.updated_items),
+            "unchanged": len(result.unchanged_items),
+            "errors": len(result.errors),
+        }
+        SCAN_MANAGER.complete_scan(now, summary)
     return result
 
 
@@ -140,23 +431,37 @@ def create_app() -> Flask:
 
     SCAN_MANAGER.start(run_scan)
 
+    @app.template_filter("format_datetime")
+    def format_datetime_filter(value: Optional[object]) -> str:
+        if value in (None, ""):
+            return "—"
+        if isinstance(value, datetime):
+            dt_value = value
+        else:
+            try:
+                dt_value = datetime.fromisoformat(str(value))
+            except ValueError:
+                return str(value)
+        return dt_value.strftime("%d.%m.%Y %H:%M")
+
+    @app.context_processor
+    def inject_status() -> Dict[str, object]:
+        return {"scan_status": SCAN_MANAGER.get_status()}
+
     @app.route("/")
     def dashboard() -> str:
         stats = DB.get_stats()
-        return render_template(
-            "dashboard.html",
-            stats=stats,
-            last_scan=SCAN_MANAGER.last_scan_at,
-            next_scan=SCAN_MANAGER.next_scan_at,
-        )
+        status = SCAN_MANAGER.get_status()
+        return render_template("dashboard.html", stats=stats, status=status)
 
     @app.post("/scan")
     def manual_scan() -> Response:
-        result = run_scan()
-        if result.errors:
-            flash("Scan completed with errors", "error")
+        if SCAN_MANAGER.is_running():
+            flash("A scan is already in progress", "info")
+        elif SCAN_MANAGER.trigger_manual(run_scan):
+            flash("Scan started", "success")
         else:
-            flash("Scan complete", "success")
+            flash("Unable to start scan", "error")
         return redirect(url_for("dashboard"))
 
     @app.route("/items")
@@ -167,12 +472,17 @@ def create_app() -> Flask:
         if monitored is not None:
             monitored_flag = monitored.lower() in {"1", "true", "yes"}
         rows = DB.get_items(monitored=monitored_flag, status=status)
+        row_dicts = [dict(row) for row in rows]
+        for entry in row_dicts:
+            entry["monitored"] = bool(entry.get("monitored"))
+            entry["ignored"] = bool(entry.get("ignored"))
+        tree_root = build_tree(row_dicts)
         return render_template(
             "items.html",
-            items=rows,
+            items=row_dicts,
+            tree=tree_root,
             monitored_filter=monitored,
             status_filter=status,
-            last_scan=SCAN_MANAGER.last_scan_at,
         )
 
     @app.post("/items/<int:item_id>/monitor")
@@ -196,7 +506,7 @@ def create_app() -> Flask:
             flash("Item not found", "error")
             return redirect(url_for("items"))
         events = DB.get_events_for_item(item_id)
-        return render_template("history.html", item=item, events=events, last_scan=SCAN_MANAGER.last_scan_at)
+        return render_template("history.html", item=item, events=events)
 
     @app.get("/downloads/<int:download_id>")
     def download(download_id: int):
@@ -236,7 +546,7 @@ def create_app() -> Flask:
 
     @app.get("/settings")
     def settings() -> str:
-        return render_template("settings.html", current=SCAN_MANAGER.interval_key, last_scan=SCAN_MANAGER.last_scan_at)
+        return render_template("settings.html", current=SCAN_MANAGER.interval_key)
 
     @app.post("/settings/interval")
     def update_interval() -> Response:
@@ -246,6 +556,34 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Invalid interval"}), 400
         SCAN_MANAGER.set_interval(value)
         return jsonify({"ok": True})
+
+    @app.post("/sections/monitor")
+    def section_monitor() -> Response:
+        data = request.get_json(force=True)
+        path = str(data.get("path") or "/")
+        monitored = bool(data.get("monitored"))
+        updated = DB.mark_items_by_path(path, monitored=monitored)
+        return jsonify({"ok": True, "updated": updated})
+
+    @app.post("/sections/ignore")
+    def section_ignore() -> Response:
+        data = request.get_json(force=True)
+        path = str(data.get("path") or "/")
+        ignored = bool(data.get("ignored"))
+        updated = DB.mark_items_by_path(path, ignored=ignored)
+        return jsonify({"ok": True, "updated": updated})
+
+    @app.get("/scan/status")
+    def scan_status_api() -> Response:
+        status = SCAN_MANAGER.get_status()
+        payload = {
+            "status": status.get("status"),
+            "last_scan_at": serialize_datetime(status.get("last_scan_at")),
+            "next_scan_at": serialize_datetime(status.get("next_scan_at")),
+            "progress": status.get("progress"),
+            "last_result": status.get("last_result"),
+        }
+        return jsonify(payload)
 
     return app
 

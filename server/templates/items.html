@@ -1,4 +1,65 @@
 {% extends "base.html" %}
+{% macro render_node(node) %}
+  <li
+    class="tree-node {{ node.node_type }}"
+    data-path="{{ node.path }}"
+    {% if node.node_type == 'file' %}data-item-id="{{ node.item.id }}"{% endif %}
+  >
+    <div class="tree-row">
+      <div class="tree-info">
+        <span class="node-name">{{ node.name }}</span>
+        {% if node.node_type == 'directory' %}
+          <span class="node-count">{{ node.total }} items</span>
+        {% else %}
+          <span class="node-date">{{ node.item.last_seen_date | format_datetime }}</span>
+          <span class="node-status {{ node.item.status }}">{{ node.item.status }}</span>
+        {% endif %}
+      </div>
+      <div class="tree-controls">
+        <div class="toggle-group">
+          {% set monitor_checked = node.monitor_state == 'all' %}
+          <label class="toggle">
+            <input
+              type="checkbox"
+              class="monitor-toggle"
+              data-state="{{ node.monitor_state }}"
+              {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}"{% else %}data-item-id="{{ node.item.id }}"{% endif %}
+              {% if monitor_checked %}checked{% endif %}
+            />
+            <span></span>
+          </label>
+          {% set ignore_checked = node.ignore_state == 'all' %}
+          <label class="toggle">
+            <input
+              type="checkbox"
+              class="ignore-toggle"
+              data-state="{{ node.ignore_state }}"
+              {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}"{% else %}data-item-id="{{ node.item.id }}"{% endif %}
+              {% if ignore_checked %}checked{% endif %}
+            />
+            <span></span>
+          </label>
+        </div>
+        {% if node.node_type == 'file' %}
+          <div class="tree-links">
+            <a href="{{ url_for('item_history', item_id=node.item.id) }}">History</a>
+            {% if node.item.file_url %}
+              <a href="{{ node.item.file_url }}" target="_blank" rel="noopener">Download</a>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if node.children %}
+      <ul class="tree-children">
+        {% for child in node.sorted_children() %}
+          {{ render_node(child) }}
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </li>
+{% endmacro %}
+
 {% block content %}
 <section class="filters">
   <form method="get">
@@ -22,53 +83,17 @@
     <button type="submit">Apply</button>
   </form>
 </section>
-<table class="items">
-  <thead>
-    <tr>
-      <th>Title</th>
-      <th>Date</th>
-      <th>Status</th>
-      <th>Monitored?</th>
-      <th>Ignored?</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for item in items %}
-      <tr data-item-id="{{ item.id }}">
-        <td>
-          {% if item.source_url %}
-            <a href="{{ item.source_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
-          {% else %}
-            {{ item.title }}
-          {% endif %}
-        </td>
-        <td>{{ item.last_seen_date or '—' }}</td>
-        <td class="status {{ item.status }}">{{ item.status }}</td>
-        <td>
-          <label class="toggle">
-            <input type="checkbox" class="monitor-toggle" {% if item.monitored %}checked{% endif %} />
-            <span></span>
-          </label>
-        </td>
-        <td>
-          <label class="toggle">
-            <input type="checkbox" class="ignore-toggle" {% if item.ignored %}checked{% endif %} />
-            <span></span>
-          </label>
-        </td>
-        <td>
-          <a href="{{ url_for('item_history', item_id=item.id) }}">History</a>
-          {% if item.file_url %}
-            <a href="{{ item.file_url }}" target="_blank" rel="noopener">Download</a>
-          {% endif %}
-        </td>
-      </tr>
-    {% else %}
-      <tr>
-        <td colspan="6">No items recorded yet.</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+
+<section class="items-tree">
+  <h2>Open data tree</h2>
+  {% if tree.children %}
+    <ul class="tree-root">
+      {% for child in tree.sorted_children() %}
+        {{ render_node(child) }}
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No items recorded yet.</p>
+  {% endif %}
+</section>
 {% endblock %}

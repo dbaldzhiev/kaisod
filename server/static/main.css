@@ -48,28 +48,13 @@ footer {
 .settings,
 .history,
 .filters,
-.items {
+.items,
+.items-tree {
   background: #ffffff;
   padding: 1.5rem;
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   margin-bottom: 1.5rem;
-}
-
-.items table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.items th,
-.items td {
-  border-bottom: 1px solid #e5e7eb;
-  padding: 0.75rem;
-  text-align: left;
-}
-
-.items tbody tr:hover {
-  background: #f3f4f6;
 }
 
 .status.new {
@@ -95,6 +80,11 @@ button {
 
 button:hover {
   background: #1d4ed8;
+}
+
+button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
 }
 
 .flashes {
@@ -161,4 +151,113 @@ button:hover {
 
 .toggle input:checked + span:before {
   transform: translateX(20px);
+}
+
+.scan-status-banner {
+  background: #111827;
+  color: #f9fafb;
+  padding: 0.75rem 2rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.scan-status-banner.running {
+  background: #1d4ed8;
+}
+
+.scan-status-banner .label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.scan-status-banner .counts {
+  font-variant-numeric: tabular-nums;
+  color: #cbd5f5;
+}
+
+.scan-status-banner .path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-root,
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.tree-root {
+  padding-left: 0;
+}
+
+.tree-node {
+  margin-bottom: 0.5rem;
+}
+
+.tree-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+
+.tree-node.directory > .tree-row {
+  background: #eef2ff;
+}
+
+.tree-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tree-info .node-name {
+  font-weight: 600;
+  color: #111827;
+}
+
+.tree-info .node-count {
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.tree-info .node-date {
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.tree-info .node-status {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tree-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.toggle-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tree-links {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.tree-links a {
+  font-size: 0.9rem;
 }
