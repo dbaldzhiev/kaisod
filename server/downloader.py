@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import requests
+import zipfile
 
 from .models import Database, ensure_storage
 from .time_utils import utcnow
@@ -40,7 +43,11 @@ def download_item(
     if not item:
         return None
 
-    date_dir = observed_date
+    try:
+        observed_dt = datetime.fromisoformat(observed_date)
+        date_dir = observed_dt.strftime("%Y-%m-%d_%H-%M-%S")
+    except ValueError:
+        date_dir = observed_date.replace(":", "-")
     item_dir = ensure_storage(str(db.base_path / str(item_id)))
     target_dir = ensure_storage(str(item_dir / date_dir))
 
@@ -51,5 +58,14 @@ def download_item(
     sha256 = compute_sha256(file_path)
     size = file_path.stat().st_size
     now = utcnow()
-    download_id = db.record_download(item_id, str(file_path), sha256, size, now)
+    download_id = db.record_download(item_id, str(file_path), sha256, size, now, observed_date)
+
+    if zipfile.is_zipfile(file_path):
+        extract_dir = item_dir / "latest"
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(file_path) as archive:
+            archive.extractall(extract_dir)
+
     return download_id

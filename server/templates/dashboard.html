@@ -2,10 +2,24 @@
 {% block content %}
 <section class="summary">
   <h2>Scan status</h2>
-  <p><strong>Last scan:</strong> {{ last_scan or 'never' }}</p>
-  <p><strong>Next scan:</strong> {{ next_scan or 'scheduled soon' }}</p>
+  <p><strong>State:</strong> <span id="dashboard-scan-state">{{ status.status|capitalize }}</span></p>
+  <p><strong>Message:</strong> <span id="dashboard-scan-message">{{ status.progress.message }}</span></p>
+  <p><strong>Current path:</strong> <span id="dashboard-scan-path">{{ status.progress.current_path or '—' }}</span></p>
+  <p><strong>Last scan:</strong> <span id="dashboard-last-scan">{{ status.last_scan_at | format_datetime }}</span></p>
+  <p><strong>Next scan:</strong> <span id="dashboard-next-scan">{{ status.next_scan_at | format_datetime }}</span></p>
+  <p class="summary-result" id="dashboard-last-result">
+    {% if status.last_result %}
+      Last result —
+      new: {{ status.last_result.new }},
+      updated: {{ status.last_result.updated }},
+      unchanged: {{ status.last_result.unchanged }},
+      errors: {{ status.last_result.errors }}
+    {% else %}
+      Last result — n/a
+    {% endif %}
+  </p>
   <form method="post" action="{{ url_for('manual_scan') }}">
-    <button type="submit">Scan now</button>
+    <button type="submit" id="dashboard-scan-button" {% if status.status == 'running' %}disabled{% endif %}>Scan now</button>
   </form>
 </section>
 <section class="stats">

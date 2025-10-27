@@ -12,4 +12,17 @@
   <button id="save-interval">Save</button>
   <p class="hint">Interval changes take effect immediately.</p>
 </section>
+
+<section class="settings">
+  <h2>Storage location</h2>
+  <p>Current folder: <code>{{ storage_path }}</code></p>
+  {% if storage_locked %}
+    <p class="hint">Storage path is controlled via <code>KAIS_MONITOR_BASE</code> and cannot be changed from the UI.</p>
+  {% else %}
+    <label for="storage-path-input">Download &amp; database folder</label>
+    <input id="storage-path-input" type="text" value="{{ storage_path }}" placeholder="/path/to/folder" />
+    <button id="save-storage">Save storage folder</button>
+    <p class="hint">Files and the SQLite database are kept together in this folder.</p>
+  {% endif %}
+</section>
 {% endblock %}

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -67,7 +67,14 @@ def _request_listing(session: requests.Session, token: str, path: str) -> List[D
     raise ValueError("Unexpected payload type from listing endpoint")
 
 
-def _iter_file_entries(session: requests.Session, token: str) -> Iterable[Dict[str, object]]:
+ProgressCallback = Callable[[str, Dict[str, object]], None]
+
+
+def _iter_file_entries(
+    session: requests.Session,
+    token: str,
+    progress: Optional[ProgressCallback] = None,
+) -> Iterable[Dict[str, object]]:
     stack: List[str] = ["/"]
     visited: set[str] = set()
     while stack:
@@ -76,6 +83,14 @@ def _iter_file_entries(session: requests.Session, token: str) -> Iterable[Dict[s
             continue
         visited.add(current)
         entries = _request_listing(session, token, current)
+        if progress:
+            progress(
+                "listing",
+                {
+                    "path": current,
+                    "entries": len(entries),
+                },
+            )
         for entry in entries:
             path = entry.get("Path")
             if not isinstance(path, str) or not path:
@@ -112,24 +127,43 @@ def _build_item(entry: Dict[str, object]) -> ScrapedItem:
     )
 
 
-def extract_items(html: str, session: requests.Session) -> List[ScrapedItem]:
+def extract_items(
+    html: str,
+    session: requests.Session,
+    progress: Optional[ProgressCallback] = None,
+) -> List[ScrapedItem]:
     token = _extract_token(html)
     items: List[ScrapedItem] = []
-    for entry in _iter_file_entries(session, token):
+    for entry in _iter_file_entries(session, token, progress):
         try:
             item = _build_item(entry)
         except ValueError as exc:
             logger.warning("Skipping entry %s: %s", entry.get("Path"), exc)
             continue
         items.append(item)
+        if progress:
+            progress(
+                "file",
+                {
+                    "path": item.path,
+                    "count": len(items),
+                },
+            )
     items.sort(key=lambda item: item.title)
     return items
 
 
-def fetch_items(session: Optional[requests.Session] = None) -> List[ScrapedItem]:
+def fetch_items(
+    session: Optional[requests.Session] = None,
+    progress: Optional[ProgressCallback] = None,
+) -> List[ScrapedItem]:
     sess = session or requests.Session()
+    if progress:
+        progress("start", {"message": "Fetching OpenData root"})
     html = fetch_html(session=sess)
-    return extract_items(html, sess)
+    if progress:
+        progress("token", {"message": "Token extracted"})
+    return extract_items(html, sess, progress)
 
 
 def serialize(item: ScrapedItem) -> dict:
