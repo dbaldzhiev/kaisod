@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="summary">
+  <h2>Scan status</h2>
+  <p><strong>Last scan:</strong> {{ last_scan or 'never' }}</p>
+  <p><strong>Next scan:</strong> {{ next_scan or 'scheduled soon' }}</p>
+  <form method="post" action="{{ url_for('manual_scan') }}">
+    <button type="submit">Scan now</button>
+  </form>
+</section>
+<section class="stats">
+  <h2>Items</h2>
+  <ul>
+    <li>Total: {{ stats.total }}</li>
+    <li>New: {{ stats.new_count }}</li>
+    <li>Updated: {{ stats.updated_count }}</li>
+    <li>Monitored: {{ stats.monitored_count }}</li>
+    <li>Ignored: {{ stats.ignored_count }}</li>
+  </ul>
+</section>
+{% endblock %}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kais Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}" />
+    <script defer src="{{ url_for('static', filename='main.js') }}"></script>
+  </head>
+  <body>
+    <header class="top-bar">
+      <h1><a href="{{ url_for('dashboard') }}">Kais Monitor</a></h1>
+      <nav>
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('items') }}">Items</a>
+        <a href="{{ url_for('settings') }}">Settings</a>
+        <a href="{{ url_for('export_csv') }}">Export CSV</a>
+        <a href="{{ url_for('export_json') }}">Export JSON</a>
+      </nav>
+    </header>
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flashes">
+            {% for category, message in messages %}
+              <li class="{{ category }}">{{ message }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer>
+      <small>Internal tool • Last scan: {{ last_scan or 'n/a' }}</small>
+    </footer>
+  </body>
+</html>

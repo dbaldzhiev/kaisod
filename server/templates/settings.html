@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="settings">
+  <h2>Scan interval</h2>
+  <p>Current interval: <strong>{{ current }}</strong></p>
+  <label for="interval-select">Change interval</label>
+  <select id="interval-select">
+    <option value="6h" {% if current == '6h' %}selected{% endif %}>Every 6 hours</option>
+    <option value="1d" {% if current == '1d' %}selected{% endif %}>Every day</option>
+    <option value="6d" {% if current == '6d' %}selected{% endif %}>Every 6 days</option>
+  </select>
+  <button id="save-interval">Save</button>
+  <p class="hint">Interval changes take effect immediately.</p>
+</section>
+{% endblock %}

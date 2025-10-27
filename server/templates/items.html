@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="filters">
+  <form method="get">
+    <label>
+      Status
+      <select name="status">
+        <option value="">All</option>
+        <option value="new" {% if status_filter == 'new' %}selected{% endif %}>New</option>
+        <option value="updated" {% if status_filter == 'updated' %}selected{% endif %}>Updated</option>
+        <option value="seen" {% if status_filter == 'seen' %}selected{% endif %}>Seen</option>
+      </select>
+    </label>
+    <label>
+      Monitored
+      <select name="monitored">
+        <option value="">All</option>
+        <option value="1" {% if monitored_filter == '1' %}selected{% endif %}>Yes</option>
+        <option value="0" {% if monitored_filter == '0' %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <button type="submit">Apply</button>
+  </form>
+</section>
+<table class="items">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Date</th>
+      <th>Status</th>
+      <th>Monitored?</th>
+      <th>Ignored?</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+      <tr data-item-id="{{ item.id }}">
+        <td>
+          {% if item.source_url %}
+            <a href="{{ item.source_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+          {% else %}
+            {{ item.title }}
+          {% endif %}
+        </td>
+        <td>{{ item.last_seen_date or '—' }}</td>
+        <td class="status {{ item.status }}">{{ item.status }}</td>
+        <td>
+          <label class="toggle">
+            <input type="checkbox" class="monitor-toggle" {% if item.monitored %}checked{% endif %} />
+            <span></span>
+          </label>
+        </td>
+        <td>
+          <label class="toggle">
+            <input type="checkbox" class="ignore-toggle" {% if item.ignored %}checked{% endif %} />
+            <span></span>
+          </label>
+        </td>
+        <td>
+          <a href="{{ url_for('item_history', item_id=item.id) }}">History</a>
+          {% if item.file_url %}
+            <a href="{{ item.file_url }}" target="_blank" rel="noopener">Download</a>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="6">No items recorded yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
