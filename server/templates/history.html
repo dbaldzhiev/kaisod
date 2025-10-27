@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="history">
+  <h2>{{ item.title }}</h2>
+  <p>Last seen date: {{ item.last_seen_date or '—' }}</p>
+  <p>Status: {{ item.status }}</p>
+  <p>
+    <a href="{{ url_for('items') }}">Back to items</a>
+  </p>
+  <h3>Events</h3>
+  <ul>
+    {% for event in events %}
+      <li>
+        <strong>{{ event.kind }}</strong>
+        on {{ event.observed_date_in_table }} ({{ event.observed_at }})
+      </li>
+    {% else %}
+      <li>No events recorded.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

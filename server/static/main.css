@@ -1,0 +1,164 @@
+:root {
+  color-scheme: light dark;
+  font-family: Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #f5f6f8;
+  color: #1f2933;
+}
+
+a {
+  color: #1a73e8;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.top-bar {
+  background: #111827;
+  color: #ffffff;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.top-bar nav a {
+  margin-left: 1rem;
+  color: #ffffff;
+}
+
+main {
+  padding: 2rem;
+}
+
+footer {
+  padding: 1rem 2rem;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.summary,
+.stats,
+.settings,
+.history,
+.filters,
+.items {
+  background: #ffffff;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  margin-bottom: 1.5rem;
+}
+
+.items table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.items th,
+.items td {
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.items tbody tr:hover {
+  background: #f3f4f6;
+}
+
+.status.new {
+  color: #047857;
+}
+
+.status.updated {
+  color: #b45309;
+}
+
+.status.seen {
+  color: #4b5563;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  border: none;
+  background: #2563eb;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1d4ed8;
+}
+
+.flashes {
+  list-style: none;
+  padding: 0;
+}
+
+.flashes li {
+  margin-bottom: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 4px;
+}
+
+.flashes li.success {
+  background: #dcfce7;
+  color: #065f46;
+}
+
+.flashes li.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle span {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #9ca3af;
+  transition: 0.2s;
+  border-radius: 34px;
+}
+
+.toggle span:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: 0.2s;
+  border-radius: 50%;
+}
+
+.toggle input:checked + span {
+  background-color: #2563eb;
+}
+
+.toggle input:checked + span:before {
+  transform: translateX(20px);
+}
