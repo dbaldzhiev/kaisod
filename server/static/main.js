@@ -11,44 +11,6 @@ const postJson = async (url, payload) => {
   return resp.json().catch(() => ({}));
 };
 
-const updateDescendantToggles = (node, checked, skip) => {
-  node.querySelectorAll('.monitor-toggle').forEach((child) => {
-    if (child === skip) return;
-    child.indeterminate = false;
-    child.checked = checked;
-    child.dataset.state = checked ? 'all' : 'none';
-  });
-};
-
-const updateAncestorStates = (node) => {
-  let current = node?.parentElement?.closest('.tree-node');
-  while (current) {
-    const toggle = current.querySelector(':scope > .tree-row .monitor-toggle');
-    const children = Array.from(
-      current.querySelectorAll(':scope > .tree-children > .tree-node > .tree-row .monitor-toggle')
-    );
-    if (!toggle || children.length === 0) {
-      current = current.parentElement?.closest('.tree-node');
-      continue;
-    }
-    const checkedCount = children.filter((child) => child.checked).length;
-    if (checkedCount === 0) {
-      toggle.indeterminate = false;
-      toggle.checked = false;
-      toggle.dataset.state = 'none';
-    } else if (checkedCount === children.length) {
-      toggle.indeterminate = false;
-      toggle.checked = true;
-      toggle.dataset.state = 'all';
-    } else {
-      toggle.checked = true;
-      toggle.indeterminate = true;
-      toggle.dataset.state = 'partial';
-    }
-    current = current.parentElement?.closest('.tree-node');
-  }
-};
-
 const updateDashboard = (data) => {
   const stateEl = document.getElementById('dashboard-scan-state');
   if (stateEl) {
@@ -144,6 +106,99 @@ document.addEventListener('DOMContentLoaded', () => {
     collapseState = {};
   }
 
+  const pendingChanges = new Map();
+  let saveInProgress = false;
+  const pendingIndicator = document.getElementById('pending-count');
+  const saveMonitoringButton = document.getElementById('save-monitoring');
+
+  const updatePendingDisplay = () => {
+    const count = pendingChanges.size;
+    if (pendingIndicator) {
+      if (count === 0) {
+        pendingIndicator.textContent = 'All changes saved';
+        pendingIndicator.classList.remove('has-pending');
+      } else {
+        pendingIndicator.textContent = `${count} pending ${count === 1 ? 'change' : 'changes'}`;
+        pendingIndicator.classList.add('has-pending');
+      }
+    }
+    if (saveMonitoringButton) {
+      saveMonitoringButton.disabled = saveInProgress || count === 0;
+    }
+  };
+
+  const refreshDirectoryPending = () => {
+    document.querySelectorAll('.tree-node').forEach((node) => node.classList.remove('has-pending'));
+    document.querySelectorAll('.tree-row.pending-change').forEach((row) => {
+      let current = row.closest('.tree-node');
+      while (current) {
+        current.classList.add('has-pending');
+        current = current.parentElement?.closest('.tree-node');
+      }
+    });
+  };
+
+  const markToggleDirty = (toggle) => {
+    const itemId = toggle.dataset.itemId;
+    if (!itemId) return;
+    const original = toggle.dataset.originalMonitored;
+    if (original === undefined) return;
+    const desired = toggle.checked ? '1' : '0';
+    const row = toggle.closest('.tree-row');
+    if (desired === original) {
+      pendingChanges.delete(itemId);
+      if (row) {
+        row.classList.remove('pending-change');
+      }
+    } else {
+      pendingChanges.set(itemId, toggle.checked);
+      if (row) {
+        row.classList.add('pending-change');
+      }
+    }
+  };
+
+  const updateAncestorStates = (node) => {
+    let current = node?.parentElement?.closest('.tree-node');
+    while (current) {
+      const toggle = current.querySelector(':scope > .tree-row .monitor-toggle');
+      const children = Array.from(
+        current.querySelectorAll(':scope > .tree-children > .tree-node > .tree-row .monitor-toggle')
+      );
+      if (!toggle || children.length === 0) {
+        current = current.parentElement?.closest('.tree-node');
+        continue;
+      }
+      const checkedCount = children.filter((child) => child.checked).length;
+      if (checkedCount === 0) {
+        toggle.indeterminate = false;
+        toggle.checked = false;
+        toggle.dataset.state = 'none';
+      } else if (checkedCount === children.length) {
+        toggle.indeterminate = false;
+        toggle.checked = true;
+        toggle.dataset.state = 'all';
+      } else {
+        toggle.checked = true;
+        toggle.indeterminate = true;
+        toggle.dataset.state = 'partial';
+      }
+      current = current.parentElement?.closest('.tree-node');
+    }
+  };
+
+  const updateDescendantToggles = (node, checked, skip) => {
+    const affected = [];
+    node.querySelectorAll('.tree-node .monitor-toggle').forEach((child) => {
+      if (child === skip) return;
+      child.indeterminate = false;
+      child.checked = checked;
+      child.dataset.state = checked ? 'all' : 'none';
+      affected.push(child);
+    });
+    return affected;
+  };
+
   const setNodeCollapse = (node, collapsed) => {
     const button = node.querySelector('.collapse-toggle');
     node.classList.toggle('collapsed', collapsed);
@@ -208,33 +263,81 @@ document.addEventListener('DOMContentLoaded', () => {
     if (checkbox.dataset.state === 'partial') {
       checkbox.indeterminate = true;
     }
-    checkbox.addEventListener('change', async (event) => {
+    checkbox.addEventListener('change', (event) => {
       const target = event.target;
       const checked = target.checked;
-      const sectionPath = target.dataset.sectionPath;
-      const itemId = target.dataset.itemId;
       const node = target.closest('.tree-node');
-      try {
-        if (sectionPath) {
-          await postJson('/sections/monitor', { path: sectionPath, monitored: checked, ignored: !checked });
-          if (node) {
-            updateDescendantToggles(node, checked, target);
-          }
-        } else if (itemId) {
-          await postJson(`/items/${itemId}/monitor`, { monitored: checked, ignored: !checked });
-        }
-        target.indeterminate = false;
-        target.dataset.state = checked ? 'all' : 'none';
-        if (node) {
-          updateAncestorStates(node);
-        }
-      } catch (err) {
-        console.error('Failed to update monitor flag', err);
-        target.checked = !checked;
-        target.indeterminate = false;
+      target.indeterminate = false;
+      target.dataset.state = checked ? 'all' : 'none';
+
+      const affected = [];
+      if (node && node.classList.contains('directory')) {
+        updateDescendantToggles(node, checked, target).forEach((toggle) => affected.push(toggle));
       }
+      affected.push(target);
+      const unique = Array.from(new Set(affected));
+      unique.forEach((toggle) => markToggleDirty(toggle));
+
+      if (node) {
+        updateAncestorStates(node);
+      }
+      refreshDirectoryPending();
+      updatePendingDisplay();
     });
   });
+
+  if (saveMonitoringButton) {
+    saveMonitoringButton.addEventListener('click', async () => {
+      if (pendingChanges.size === 0 || saveInProgress) {
+        return;
+      }
+      saveInProgress = true;
+      updatePendingDisplay();
+      const changeEntries = Array.from(pendingChanges.entries());
+      const payload = changeEntries.map(([itemId, monitored]) => ({
+        item_id: Number(itemId),
+        monitored,
+      }));
+      try {
+        const resp = await postJson('/items/bulk-monitor', { changes: payload });
+        changeEntries.forEach(([itemId, monitored]) => {
+          const toggle = document.querySelector(`.monitor-toggle[data-item-id="${itemId}"]`);
+          if (!toggle) return;
+          toggle.dataset.originalMonitored = monitored ? '1' : '0';
+          toggle.dataset.originalState = monitored ? 'all' : 'none';
+          toggle.dataset.state = monitored ? 'all' : 'none';
+          toggle.checked = monitored;
+          toggle.indeterminate = false;
+          const row = toggle.closest('.tree-row');
+          if (row) {
+            row.classList.remove('pending-change');
+          }
+          const node = toggle.closest('.tree-node');
+          if (node) {
+            updateAncestorStates(node);
+          }
+        });
+        pendingChanges.clear();
+        refreshDirectoryPending();
+        const downloadsStarted = resp?.downloads_started ?? 0;
+        const errors = Array.isArray(resp?.errors) ? resp.errors : [];
+        const messages = ['Monitoring changes saved.'];
+        if (downloadsStarted > 0) {
+          messages.push(`${downloadsStarted} download${downloadsStarted === 1 ? '' : 's'} started automatically.`);
+        }
+        if (errors.length > 0) {
+          messages.push(`${errors.length} error${errors.length === 1 ? '' : 's'} occurred. Check logs for details.`);
+        }
+        alert(messages.join(' '));
+      } catch (err) {
+        console.error('Failed to save monitoring changes', err);
+        alert('Failed to save monitoring changes.');
+      } finally {
+        saveInProgress = false;
+        updatePendingDisplay();
+      }
+    });
+  }
 
   const saveButton = document.getElementById('save-interval');
   if (saveButton) {
@@ -327,6 +430,9 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   }
+
+  refreshDirectoryPending();
+  updatePendingDisplay();
 
   pollScanStatus();
 });

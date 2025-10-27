@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -569,6 +569,76 @@ def create_app() -> Flask:
         for entry in items:
             annotate_item(entry, DB.base_path)
         return render_template("monitored.html", items=items, storage_root=str(DB.base_path))
+
+    @app.post("/items/bulk-monitor")
+    def bulk_monitor() -> Response:
+        data = request.get_json(force=True) or {}
+        changes = data.get("changes")
+        if not isinstance(changes, list):
+            return jsonify({"ok": False, "error": "Invalid payload"}), 400
+        seen: Set[int] = set()
+        results: List[Dict[str, object]] = []
+        downloads_started = 0
+        errors: List[str] = []
+        for change in changes:
+            if not isinstance(change, dict):
+                continue
+            raw_id = change.get("item_id")
+            try:
+                item_id = int(raw_id)
+            except (TypeError, ValueError):
+                errors.append(f"Invalid item id: {raw_id}")
+                continue
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            monitored_value = change.get("monitored")
+            monitored = bool(monitored_value)
+            if isinstance(monitored_value, str):
+                monitored = monitored_value.lower() in {"1", "true", "yes", "on"}
+            item = DB.get_item(item_id)
+            if not item:
+                errors.append(f"Item {item_id} not found")
+                continue
+            current_monitored = bool(item["monitored"])
+            DB.mark_item_flags(item_id, monitored=monitored, ignored=not monitored)
+            result_entry: Dict[str, object] = {
+                "item_id": item_id,
+                "monitored": monitored,
+                "changed": current_monitored != monitored,
+                "download_started": False,
+            }
+            if monitored and item["file_url"] and item["last_seen_date"]:
+                latest_download = DB.get_latest_download(item_id)
+                latest_observed = None
+                if latest_download:
+                    latest_observed = latest_download.get("observed_date_in_table")
+                observed_date = str(item["last_seen_date"])
+                needs_download = (
+                    latest_download is None
+                    or latest_observed is None
+                    or str(latest_observed) < observed_date
+                )
+                if needs_download:
+                    try:
+                        download_item(DB, item_id, str(item["file_url"]), observed_date)
+                        downloads_started += 1
+                        result_entry["download_started"] = True
+                    except DownloadError as exc:
+                        logger.warning("Failed to download item %s: %s", item_id, exc)
+                        errors.append(f"Download failed for item {item_id}: {exc}")
+                    except Exception as exc:  # pragma: no cover - safeguard
+                        logger.exception("Unexpected error downloading item %s", item_id)
+                        errors.append(f"Download failed for item {item_id}: {exc}")
+            results.append(result_entry)
+        return jsonify(
+            {
+                "ok": True,
+                "results": results,
+                "downloads_started": downloads_started,
+                "errors": errors,
+            }
+        )
 
     @app.post("/items/<int:item_id>/monitor")
     def toggle_monitor(item_id: int) -> Response:

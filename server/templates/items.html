@@ -60,7 +60,8 @@
               type="checkbox"
               class="monitor-toggle"
               data-state="{{ node.monitor_state }}"
-              {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}"{% else %}data-item-id="{{ node.item.id }}"{% endif %}
+              data-original-state="{{ node.monitor_state }}"
+              {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}" data-original-monitored=""{% else %}data-item-id="{{ node.item.id }}" data-original-monitored="{{ 1 if node.item.monitored else 0 }}"{% endif %}
               {% if monitor_checked %}checked{% endif %}
             />
             <span></span>
@@ -129,10 +130,16 @@
       <button type="button" id="expand-unsynced">Expand needing sync</button>
       <button type="button" id="reset-tree-state" class="link-button">Reset view</button>
     </div>
-    <div class="tree-legend">
-      <span><span class="legend-pill sync-synced"></span> Up to date</span>
-      <span><span class="legend-pill sync-outdated"></span> Needs sync</span>
-      <span><span class="legend-pill sync-missing"></span> Not downloaded</span>
+    <div class="tree-secondary">
+      <div class="tree-legend">
+        <span><span class="legend-pill sync-synced"></span> Up to date</span>
+        <span><span class="legend-pill sync-outdated"></span> Needs sync</span>
+        <span><span class="legend-pill sync-missing"></span> Not downloaded</span>
+      </div>
+      <div class="tree-save">
+        <span class="pending-indicator" id="pending-count" aria-live="polite"></span>
+        <button type="button" id="save-monitoring" disabled>Save changes</button>
+      </div>
     </div>
   </div>
   {% if tree.children %}

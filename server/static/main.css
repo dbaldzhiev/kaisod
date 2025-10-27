@@ -390,6 +390,14 @@ button:disabled {
   margin-bottom: 1rem;
 }
 
+.tree-secondary {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .tree-tools {
   display: flex;
   gap: 0.5rem;
@@ -422,6 +430,50 @@ button:disabled {
 
 .legend-pill.sync-missing {
   background: #f87171;
+}
+
+.tree-save {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+#save-monitoring {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#save-monitoring:hover:not([disabled]) {
+  background: #1d4ed8;
+}
+
+#save-monitoring[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pending-indicator {
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.pending-indicator.has-pending {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.tree-row.pending-change {
+  background: #fff7ed;
+  border-color: #f59e0b;
+}
+
+.tree-node.has-pending > .tree-row {
+  border-color: #f59e0b;
 }
 
 .link-button {

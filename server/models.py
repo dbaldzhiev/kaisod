@@ -342,6 +342,20 @@ class Database:
             self._conn.commit()
             return int(cur.lastrowid)
 
+    def get_latest_download(self, item_id: int) -> Optional[sqlite3.Row]:
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM downloads
+                WHERE item_id = ?
+                ORDER BY datetime(downloaded_at) DESC
+                LIMIT 1
+                """,
+                (item_id,),
+            )
+            return cur.fetchone()
+
     def get_download(self, download_id: int) -> Optional[sqlite3.Row]:
         with self.cursor() as cur:
             cur.execute("SELECT * FROM downloads WHERE id = ?", (download_id,))
