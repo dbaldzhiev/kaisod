@@ -485,11 +485,25 @@ def create_app() -> Flask:
             status_filter=status,
         )
 
+    @app.route("/monitored")
+    def monitored_items() -> str:
+        rows = DB.get_items(monitored=True)
+        items = [dict(row) for row in rows]
+        for entry in items:
+            entry["monitored"] = bool(entry.get("monitored"))
+            entry["ignored"] = bool(entry.get("ignored"))
+        return render_template("monitored.html", items=items)
+
     @app.post("/items/<int:item_id>/monitor")
     def toggle_monitor(item_id: int) -> Response:
         data = request.get_json(force=True)
         monitored = bool(data.get("monitored"))
-        DB.mark_item_flags(item_id, monitored=monitored)
+        ignored = data.get("ignored")
+        if ignored is not None:
+            ignored_flag = bool(ignored)
+        else:
+            ignored_flag = not monitored
+        DB.mark_item_flags(item_id, monitored=monitored, ignored=ignored_flag)
         return jsonify({"ok": True})
 
     @app.post("/items/<int:item_id>/ignore")
@@ -562,7 +576,9 @@ def create_app() -> Flask:
         data = request.get_json(force=True)
         path = str(data.get("path") or "/")
         monitored = bool(data.get("monitored"))
-        updated = DB.mark_items_by_path(path, monitored=monitored)
+        ignored_value = data.get("ignored")
+        ignored = bool(ignored_value) if ignored_value is not None else (not monitored)
+        updated = DB.mark_items_by_path(path, monitored=monitored, ignored=ignored)
         return jsonify({"ok": True, "updated": updated})
 
     @app.post("/sections/ignore")

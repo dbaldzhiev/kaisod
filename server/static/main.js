@@ -11,8 +11,8 @@ const postJson = async (url, payload) => {
   return resp.json().catch(() => ({}));
 };
 
-const updateDescendantToggles = (node, selector, checked, skip) => {
-  node.querySelectorAll(selector).forEach((child) => {
+const updateDescendantToggles = (node, checked, skip) => {
+  node.querySelectorAll('.monitor-toggle').forEach((child) => {
     if (child === skip) return;
     child.indeterminate = false;
     child.checked = checked;
@@ -20,12 +20,32 @@ const updateDescendantToggles = (node, selector, checked, skip) => {
   });
 };
 
-const disableCounterpart = (node, selector) => {
-  const counterpart = node.querySelector(selector);
-  if (counterpart) {
-    counterpart.checked = false;
-    counterpart.indeterminate = false;
-    counterpart.dataset.state = 'none';
+const updateAncestorStates = (node) => {
+  let current = node?.parentElement?.closest('.tree-node');
+  while (current) {
+    const toggle = current.querySelector(':scope > .tree-row .monitor-toggle');
+    const children = Array.from(
+      current.querySelectorAll(':scope > .tree-children > .tree-node > .tree-row .monitor-toggle')
+    );
+    if (!toggle || children.length === 0) {
+      current = current.parentElement?.closest('.tree-node');
+      continue;
+    }
+    const checkedCount = children.filter((child) => child.checked).length;
+    if (checkedCount === 0) {
+      toggle.indeterminate = false;
+      toggle.checked = false;
+      toggle.dataset.state = 'none';
+    } else if (checkedCount === children.length) {
+      toggle.indeterminate = false;
+      toggle.checked = true;
+      toggle.dataset.state = 'all';
+    } else {
+      toggle.checked = true;
+      toggle.indeterminate = true;
+      toggle.dataset.state = 'partial';
+    }
+    current = current.parentElement?.closest('.tree-node');
   }
 };
 
@@ -116,6 +136,49 @@ const pollScanStatus = async () => {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  const collapseStorageKey = 'itemsTreeCollapse';
+  let collapseState = {};
+  try {
+    collapseState = JSON.parse(localStorage.getItem(collapseStorageKey) || '{}');
+  } catch (err) {
+    collapseState = {};
+  }
+
+  const setNodeCollapse = (node, collapsed) => {
+    const button = node.querySelector('.collapse-toggle');
+    node.classList.toggle('collapsed', collapsed);
+    if (button) {
+      button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      button.textContent = collapsed ? '▸' : '▾';
+      button.title = collapsed ? 'Expand section' : 'Collapse section';
+      button.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
+    }
+  };
+
+  document.querySelectorAll('.tree-node.directory').forEach((node) => {
+    const path = node.dataset.path;
+    const button = node.querySelector('.collapse-toggle');
+    if (!button) return;
+    const initial = path && Object.prototype.hasOwnProperty.call(collapseState, path) ? collapseState[path] : false;
+    setNodeCollapse(node, Boolean(initial));
+    button.addEventListener('click', () => {
+      const collapsed = !node.classList.contains('collapsed');
+      setNodeCollapse(node, collapsed);
+      if (path) {
+        if (collapsed) {
+          collapseState[path] = true;
+        } else {
+          delete collapseState[path];
+        }
+        try {
+          localStorage.setItem(collapseStorageKey, JSON.stringify(collapseState));
+        } catch (err) {
+          console.warn('Unable to persist collapse state', err);
+        }
+      }
+    });
+  });
+
   document.querySelectorAll('.monitor-toggle').forEach((checkbox) => {
     if (checkbox.dataset.state === 'partial') {
       checkbox.indeterminate = true;
@@ -128,66 +191,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const node = target.closest('.tree-node');
       try {
         if (sectionPath) {
-          await postJson('/sections/monitor', { path: sectionPath, monitored: checked });
+          await postJson('/sections/monitor', { path: sectionPath, monitored: checked, ignored: !checked });
           if (node) {
-            updateDescendantToggles(node, '.monitor-toggle', checked, target);
-            if (checked) {
-              node.querySelectorAll('.ignore-toggle').forEach((ignoreToggle) => {
-                ignoreToggle.checked = false;
-                ignoreToggle.indeterminate = false;
-                ignoreToggle.dataset.state = 'none';
-              });
-            }
+            updateDescendantToggles(node, checked, target);
           }
         } else if (itemId) {
-          await postJson(`/items/${itemId}/monitor`, { monitored: checked });
-          if (checked && node) {
-            disableCounterpart(node, '.ignore-toggle');
-          }
+          await postJson(`/items/${itemId}/monitor`, { monitored: checked, ignored: !checked });
         }
         target.indeterminate = false;
         target.dataset.state = checked ? 'all' : 'none';
+        if (node) {
+          updateAncestorStates(node);
+        }
       } catch (err) {
         console.error('Failed to update monitor flag', err);
-        target.checked = !checked;
-        target.indeterminate = false;
-      }
-    });
-  });
-
-  document.querySelectorAll('.ignore-toggle').forEach((checkbox) => {
-    if (checkbox.dataset.state === 'partial') {
-      checkbox.indeterminate = true;
-    }
-    checkbox.addEventListener('change', async (event) => {
-      const target = event.target;
-      const checked = target.checked;
-      const sectionPath = target.dataset.sectionPath;
-      const itemId = target.dataset.itemId;
-      const node = target.closest('.tree-node');
-      try {
-        if (sectionPath) {
-          await postJson('/sections/ignore', { path: sectionPath, ignored: checked });
-          if (node) {
-            updateDescendantToggles(node, '.ignore-toggle', checked, target);
-            if (checked) {
-              node.querySelectorAll('.monitor-toggle').forEach((monitorToggle) => {
-                monitorToggle.checked = false;
-                monitorToggle.indeterminate = false;
-                monitorToggle.dataset.state = 'none';
-              });
-            }
-          }
-        } else if (itemId) {
-          await postJson(`/items/${itemId}/ignore`, { ignored: checked });
-          if (checked && node) {
-            disableCounterpart(node, '.monitor-toggle');
-          }
-        }
-        target.indeterminate = false;
-        target.dataset.state = checked ? 'all' : 'none';
-      } catch (err) {
-        console.error('Failed to update ignore flag', err);
         target.checked = !checked;
         target.indeterminate = false;
       }

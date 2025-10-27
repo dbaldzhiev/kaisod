@@ -49,7 +49,8 @@ footer {
 .history,
 .filters,
 .items,
-.items-tree {
+.items-tree,
+.monitored {
   background: #ffffff;
   padding: 1.5rem;
   border-radius: 8px;
@@ -185,6 +186,7 @@ button:disabled {
   white-space: nowrap;
 }
 
+
 .tree-root,
 .tree-children {
   list-style: none;
@@ -201,14 +203,42 @@ button:disabled {
 }
 
 .tree-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1rem;
   padding: 0.5rem 0.75rem;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #f9fafb;
+}
+
+.tree-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+}
+
+.collapse-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: #1f2933;
+  padding: 0;
+}
+
+.collapse-toggle:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.collapse-spacer {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
 }
 
 .tree-node.directory > .tree-row {
@@ -260,4 +290,33 @@ button:disabled {
 
 .tree-links a {
   font-size: 0.9rem;
+}
+
+.tree-node.directory.collapsed > .tree-row .collapse-toggle {
+  transform: rotate(-90deg);
+}
+
+.tree-node.collapsed > .tree-children {
+  display: none;
+}
+
+.monitored-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.monitored-table th,
+.monitored-table td {
+  padding: 0.75rem 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+}
+
+.monitored-table tbody tr:hover {
+  background: #f3f4f6;
+}
+
+.monitored-table td.actions a {
+  color: #2563eb;
 }

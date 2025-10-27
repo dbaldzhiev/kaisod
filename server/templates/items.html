@@ -6,6 +6,19 @@
     {% if node.node_type == 'file' %}data-item-id="{{ node.item.id }}"{% endif %}
   >
     <div class="tree-row">
+      <div class="tree-collapse">
+        {% if node.node_type == 'directory' %}
+          <button
+            type="button"
+            class="collapse-toggle"
+            aria-expanded="true"
+            aria-label="Collapse section"
+            title="Collapse section"
+          >▾</button>
+        {% else %}
+          <span class="collapse-spacer"></span>
+        {% endif %}
+      </div>
       <div class="tree-info">
         <span class="node-name">{{ node.name }}</span>
         {% if node.node_type == 'directory' %}
@@ -25,17 +38,6 @@
               data-state="{{ node.monitor_state }}"
               {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}"{% else %}data-item-id="{{ node.item.id }}"{% endif %}
               {% if monitor_checked %}checked{% endif %}
-            />
-            <span></span>
-          </label>
-          {% set ignore_checked = node.ignore_state == 'all' %}
-          <label class="toggle">
-            <input
-              type="checkbox"
-              class="ignore-toggle"
-              data-state="{{ node.ignore_state }}"
-              {% if node.node_type == 'directory' %}data-section-path="{{ node.path }}"{% else %}data-item-id="{{ node.item.id }}"{% endif %}
-              {% if ignore_checked %}checked{% endif %}
             />
             <span></span>
           </label>

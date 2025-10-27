@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="monitored">
+  <h2>Monitored items</h2>
+  {% if items %}
+    <table class="monitored-table">
+      <thead>
+        <tr>
+          <th scope="col">Title</th>
+          <th scope="col">Section</th>
+          <th scope="col">Last change (KAIS)</th>
+          <th scope="col">Status</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td data-label="Title">
+              <a href="{{ url_for('item_history', item_id=item.id) }}">{{ item.title }}</a>
+            </td>
+            <td data-label="Section">{{ item.path or '—' }}</td>
+            <td data-label="Last change">{{ item.last_seen_date | format_datetime }}</td>
+            <td data-label="Status" class="status {{ item.status }}">{{ item.status }}</td>
+            <td data-label="Actions" class="actions">
+              {% if item.file_url %}
+                <a href="{{ item.file_url }}" target="_blank" rel="noopener">Download</a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No items are currently monitored.</p>
+  {% endif %}
+</section>
+{% endblock %}
