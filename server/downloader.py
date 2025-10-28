@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 import requests
 import zipfile
 
 from .models import Database, ensure_storage
+from .storage import resolve_item_storage
 from .time_utils import utcnow
 
 
@@ -24,6 +26,46 @@ def compute_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+ProgressCallback = Callable[[str, Dict[str, object]], None]
+
+DOWNLOAD_CHUNK_SIZE = 65536
+DOWNLOAD_PROGRESS_STEP = 5  # percentage points
+DOWNLOAD_PROGRESS_BYTES = 5 * 1024 * 1024  # 5 MiB when size unknown
+
+
+def _emit(progress: Optional[ProgressCallback], stage: str, payload: Dict[str, object]) -> None:
+    if progress:
+        try:
+            progress(stage, payload)
+        except Exception:
+            # Progress callbacks are best effort and must not break downloads
+            pass
+
+
+def _safe_extract(archive: zipfile.ZipFile, destination: Path, progress: Optional[ProgressCallback]) -> None:
+    members = archive.infolist()
+    total = len(members)
+    dest_root = destination.resolve()
+    dest_root_str = str(dest_root)
+    _emit(progress, "extract:start", {"destination": str(destination), "members": total})
+    for index, info in enumerate(members, start=1):
+        target = destination / info.filename
+        resolved = target.resolve()
+        resolved_str = str(resolved)
+        if os.path.commonpath([dest_root_str, resolved_str]) != dest_root_str:
+            raise DownloadError("Archive contains unsafe paths")
+        if info.is_dir():
+            resolved.mkdir(parents=True, exist_ok=True)
+        else:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as src, resolved.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+        _emit(
+            progress,
+            "extract:member",
+            {"index": index, "total": total, "name": info.filename},
+        )
+    _emit(progress, "extract:complete", {"destination": str(destination), "members": total})
 
 
 def download_item(
@@ -32,28 +74,102 @@ def download_item(
     file_url: str,
     observed_date: str,
     session: Optional[requests.Session] = None,
+    progress: Optional[ProgressCallback] = None,
 ) -> Optional[int]:
     """Download the file for the monitored item and persist metadata."""
+
     session = session or requests.Session()
-    resp = session.get(file_url, timeout=60)
-    if resp.status_code != 200:
-        raise DownloadError(f"Failed to download {file_url}: {resp.status_code}")
+    try:
+        response = session.get(file_url, timeout=60, stream=True)
+    except requests.RequestException as exc:  # pragma: no cover - defensive
+        raise DownloadError(f"Failed to download {file_url}: {exc}") from exc
+
+    if response.status_code != 200:
+        response.close()
+        raise DownloadError(f"Failed to download {file_url}: {response.status_code}")
 
     item = db.get_item(item_id)
     if not item:
+        response.close()
         return None
+
+    item_data = dict(item)
 
     try:
         observed_dt = datetime.fromisoformat(observed_date)
         date_dir = observed_dt.strftime("%Y-%m-%d_%H-%M-%S")
     except ValueError:
         date_dir = observed_date.replace(":", "-")
-    item_dir = ensure_storage(str(db.base_path / str(item_id)))
-    target_dir = ensure_storage(str(item_dir / date_dir))
 
-    filename = file_url.split("/")[-1] or f"download-{item_id}"
-    file_path = Path(target_dir) / filename
-    file_path.write_bytes(resp.content)
+    item_root, _, archive_name = resolve_item_storage(
+        db.base_path,
+        raw_path=item_data.get("path"),
+        title=item_data.get("title"),
+        file_url=item_data.get("file_url") or file_url,
+        item_id=item_id,
+    )
+    ensure_storage(str(item_root))
+    target_dir = ensure_storage(str(item_root / date_dir))
+    file_path = Path(target_dir) / archive_name
+
+    total_size = int(response.headers.get("Content-Length") or 0)
+    downloaded = 0
+    last_percent = -1
+    last_bytes_mark = 0
+    _emit(
+        progress,
+        "download:start",
+        {"total_bytes": total_size, "destination": str(file_path)},
+    )
+
+    try:
+        with file_path.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                downloaded += len(chunk)
+                if total_size > 0:
+                    percent = int(downloaded * 100 / total_size)
+                    if percent >= last_percent + DOWNLOAD_PROGRESS_STEP or downloaded == total_size:
+                        last_percent = percent
+                        _emit(
+                            progress,
+                            "download:chunk",
+                            {
+                                "downloaded_bytes": downloaded,
+                                "total_bytes": total_size,
+                                "percent": percent,
+                                "destination": str(file_path),
+                            },
+                        )
+                else:
+                    if downloaded - last_bytes_mark >= DOWNLOAD_PROGRESS_BYTES:
+                        last_bytes_mark = downloaded
+                        _emit(
+                            progress,
+                            "download:chunk",
+                            {
+                                "downloaded_bytes": downloaded,
+                                "total_bytes": 0,
+                                "destination": str(file_path),
+                            },
+                        )
+    except Exception:
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
+        raise
+    finally:
+        response.close()
+
+    _emit(
+        progress,
+        "download:complete",
+        {"downloaded_bytes": downloaded, "total_bytes": total_size, "destination": str(file_path)},
+    )
 
     sha256 = compute_sha256(file_path)
     size = file_path.stat().st_size
@@ -61,11 +177,14 @@ def download_item(
     download_id = db.record_download(item_id, str(file_path), sha256, size, now, observed_date)
 
     if zipfile.is_zipfile(file_path):
-        extract_dir = item_dir / "latest"
+        extract_dir = item_root / "latest"
         if extract_dir.exists():
             shutil.rmtree(extract_dir)
         extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(file_path) as archive:
-            archive.extractall(extract_dir)
+        try:
+            with zipfile.ZipFile(file_path) as archive:
+                _safe_extract(archive, extract_dir, progress)
+        except zipfile.BadZipFile as exc:
+            raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
     return download_id

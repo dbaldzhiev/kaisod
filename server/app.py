@@ -29,6 +29,7 @@ if __package__ in (None, ""):
         relocate_storage_directory,
         save_configured_base_path,
     )  # type: ignore[no-redef]
+    from server.storage import resolve_item_storage  # type: ignore[no-redef]
     from server.time_utils import utcnow  # type: ignore[no-redef]
 else:
     from . import crawler, detector
@@ -40,6 +41,7 @@ else:
         relocate_storage_directory,
         save_configured_base_path,
     )
+    from .storage import resolve_item_storage
     from .time_utils import utcnow
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +63,27 @@ def serialize_datetime(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
     return value.isoformat()
+
+
+def format_bytes(value: Optional[int]) -> str:
+    """Return a human friendly byte size representation."""
+
+    if value is None:
+        return "unknown size"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unknown size"
+    if number <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    for unit in units:
+        if number < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(number)} B"
+            return f"{number:.1f} {unit}"
+        number /= 1024
+    return f"{number:.1f} PB"
 
 
 def normalize_path(raw_path: Optional[str], title: str) -> str:
@@ -212,10 +235,23 @@ def annotate_item(entry: dict, base_path: Path) -> None:
     elif last_observed is not None:
         entry["last_download_observed_date"] = str(last_observed)
 
-    local_root = base_path / str(entry.get("id"))
+    try:
+        item_id = int(entry.get("id"))
+    except (TypeError, ValueError):
+        item_id = 0
+
+    local_root, relative_path, _ = resolve_item_storage(
+        base_path,
+        raw_path=entry.get("path"),
+        title=entry.get("title"),
+        file_url=entry.get("file_url"),
+        item_id=item_id,
+    )
     latest_extract = local_root / "latest"
     entry["local_root"] = str(local_root)
+    entry["storage_relative_path"] = str(relative_path)
     entry["latest_extract_path"] = str(latest_extract)
+    entry["latest_extract_relative"] = str(relative_path / "latest")
     entry["latest_extract_exists"] = latest_extract.exists()
 
     last_download_path = entry.get("last_download_path")
@@ -461,32 +497,171 @@ def run_scan() -> Optional[detector.ScanResult]:
                 current_path=None,
             )
 
-            downloads = [
-                item_id
-                for item_id in result.new_items + result.updated_items
-                if item_id is not None
-            ]
-            total_downloads = len(downloads)
+            download_rows = []
+            for item_id in result.new_items + result.updated_items:
+                if item_id is None:
+                    continue
+                row = DB.get_item(item_id)
+                if not row:
+                    continue
+                if not row["file_url"] or not row["monitored"] or row["ignored"]:
+                    continue
+                download_rows.append(row)
+
+            total_downloads = len(download_rows)
             if total_downloads:
-                for index, item_id in enumerate(downloads, start=1):
-                    row = DB.get_item(item_id)
-                    if not row:
-                        continue
-                    if not row["file_url"] or not row["monitored"] or row["ignored"]:
-                        continue
-                    path = row["path"] or row["title"]
+                for index, row in enumerate(download_rows, start=1):
+                    item_id = int(row["id"])
+                    path = row["path"] or row["title"] or f"Item {item_id}"
+                    display_path = str(path)
+
+                    def progress_callback(
+                        stage: str,
+                        payload: Dict[str, object],
+                        *,
+                        target_index: int = index,
+                        downloads_total: int = total_downloads,
+                        item_path: str = display_path,
+                    ) -> None:
+                        processed_count = max(0, target_index - 1)
+                        if stage == "download:start":
+                            total_bytes = payload.get("total_bytes")
+                            if isinstance(total_bytes, int) and total_bytes > 0:
+                                message = f"Downloading {item_path} ({format_bytes(total_bytes)})"
+                            else:
+                                message = f"Downloading {item_path}"
+                            SCAN_MANAGER.update_progress(
+                                stage="downloading",
+                                message=message,
+                                processed=processed_count,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+                        elif stage == "download:chunk":
+                            downloaded_bytes = payload.get("downloaded_bytes")
+                            total_bytes = payload.get("total_bytes")
+                            percent = payload.get("percent")
+                            parts: List[str] = []
+                            if isinstance(percent, int):
+                                parts.append(f"{percent}%")
+                            if isinstance(downloaded_bytes, int) and isinstance(total_bytes, int) and total_bytes > 0:
+                                parts.append(
+                                    f"{format_bytes(downloaded_bytes)} / {format_bytes(total_bytes)}"
+                                )
+                            elif isinstance(downloaded_bytes, int):
+                                parts.append(format_bytes(downloaded_bytes))
+                            detail = " - ".join(parts)
+                            message = f"Downloading {item_path}"
+                            if detail:
+                                message = f"{message} ({detail})"
+                            SCAN_MANAGER.update_progress(
+                                stage="downloading",
+                                message=message,
+                                processed=processed_count,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+                        elif stage == "download:complete":
+                            downloaded_bytes = payload.get("downloaded_bytes")
+                            total_bytes = payload.get("total_bytes")
+                            if isinstance(downloaded_bytes, int) and isinstance(total_bytes, int) and total_bytes > 0:
+                                detail = f"{format_bytes(downloaded_bytes)} / {format_bytes(total_bytes)}"
+                            elif isinstance(downloaded_bytes, int):
+                                detail = format_bytes(downloaded_bytes)
+                            else:
+                                detail = None
+                            message = f"Download finished for {item_path}"
+                            if detail:
+                                message = f"{message} ({detail})"
+                            SCAN_MANAGER.update_progress(
+                                stage="downloading",
+                                message=message,
+                                processed=processed_count,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+                        elif stage == "extract:start":
+                            members = payload.get("members")
+                            if isinstance(members, int) and members > 0:
+                                message = f"Extracting {item_path} (0/{members})"
+                            else:
+                                message = f"Extracting {item_path}"
+                            SCAN_MANAGER.update_progress(
+                                stage="extracting",
+                                message=message,
+                                processed=processed_count,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+                        elif stage == "extract:member":
+                            member_index = payload.get("index")
+                            member_total = payload.get("total")
+                            member_name = payload.get("name")
+                            if isinstance(member_index, int) and isinstance(member_total, int) and member_total > 0:
+                                message = f"Extracting {item_path} ({member_index}/{member_total})"
+                            else:
+                                message = f"Extracting {item_path}"
+                            if isinstance(member_name, str) and member_name:
+                                message = f"{message}: {member_name}"
+                            SCAN_MANAGER.update_progress(
+                                stage="extracting",
+                                message=message,
+                                processed=processed_count,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+                        elif stage == "extract:complete":
+                            members = payload.get("members")
+                            if isinstance(members, int) and members > 0:
+                                message = f"Extraction complete for {item_path} ({members} items)"
+                            else:
+                                message = f"Extraction complete for {item_path}"
+                            SCAN_MANAGER.update_progress(
+                                stage="downloading",
+                                message=message,
+                                processed=target_index,
+                                total=downloads_total,
+                                current_path=item_path,
+                            )
+
                     SCAN_MANAGER.update_progress(
                         stage="downloading",
-                        message=f"Downloading {path}",
-                        processed=index,
+                        message=f"Preparing download for {display_path}",
+                        processed=index - 1,
                         total=total_downloads,
-                        current_path=path,
+                        current_path=display_path,
+                    )
+                    observed_value = row["last_seen_date"]
+                    observed_str = (
+                        str(observed_value)
+                        if observed_value is not None
+                        else now.isoformat()
                     )
                     try:
-                        download_item(DB, item_id, row["file_url"], row["last_seen_date"])
+                        download_item(
+                            DB,
+                            item_id,
+                            str(row["file_url"]),
+                            observed_str,
+                            progress=progress_callback,
+                        )
+                        SCAN_MANAGER.update_progress(
+                            stage="downloading",
+                            message=f"Finished {display_path}",
+                            processed=index,
+                            total=total_downloads,
+                            current_path=display_path,
+                        )
                     except DownloadError as exc:
                         logger.error("Download failed for item %s: %s", item_id, exc)
                         result.errors.append(str(exc))
+                        SCAN_MANAGER.update_progress(
+                            stage="error",
+                            message=f"Download failed for {display_path}: {exc}",
+                            processed=index - 1,
+                            total=total_downloads,
+                            current_path=display_path,
+                        )
                 SCAN_MANAGER.update_progress(
                     stage="downloading",
                     message="Downloads complete",

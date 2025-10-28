@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
 ISO_FORMAT = "%Y-%m-%dT%H:%M:%S"
-DEFAULT_BASE_PATH = os.environ.get("KAIS_MONITOR_BASE", "/var/lib/kais-monitor")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_DATA_ROOT = (_PROJECT_ROOT / "data").resolve()
+DEFAULT_BASE_PATH = os.environ.get("KAIS_MONITOR_BASE") or str(_DEFAULT_DATA_ROOT)
 DB_FILENAME = "kais.sqlite3"
 CONFIG_FILE_ENV = "KAIS_MONITOR_STORAGE_CONFIG"
 CONFIG_DIR_ENV = "KAIS_MONITOR_CONFIG_DIR"
