@@ -69,7 +69,7 @@ fi
 if [[ -n "$OVERRIDE_DATA_DIR" ]]; then
   DATA_DIR="$OVERRIDE_DATA_DIR"
 else
-  DATA_DIR=$(realpath -m "${INSTALL_DIR}/../data")
+  DATA_DIR=$(realpath -m "${INSTALL_DIR}/data")
 fi
 
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

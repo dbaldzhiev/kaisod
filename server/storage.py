@@ -3,19 +3,101 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-_SANITIZE_RE = re.compile(r"[^0-9A-Za-z._()\-\s]+")
+_SANITIZE_RE = re.compile(r"[^0-9A-Za-z._()\-]+")
+
+_CYRILLIC_MAP: Dict[str, str] = {
+    # Uppercase
+    "А": "A",
+    "Б": "B",
+    "В": "V",
+    "Г": "G",
+    "Д": "D",
+    "Е": "E",
+    "Ж": "Zh",
+    "З": "Z",
+    "И": "I",
+    "Й": "Y",
+    "К": "K",
+    "Л": "L",
+    "М": "M",
+    "Н": "N",
+    "О": "O",
+    "П": "P",
+    "Р": "R",
+    "С": "S",
+    "Т": "T",
+    "У": "U",
+    "Ф": "F",
+    "Х": "H",
+    "Ц": "Ts",
+    "Ч": "Ch",
+    "Ш": "Sh",
+    "Щ": "Sht",
+    "Ъ": "A",
+    "Ы": "Y",
+    "Ь": "Y",
+    "Ю": "Yu",
+    "Я": "Ya",
+    "Ё": "Yo",
+    "Ѝ": "I",
+    "І": "I",
+    # Lowercase
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sht",
+    "ъ": "a",
+    "ы": "y",
+    "ь": "y",
+    "ю": "yu",
+    "я": "ya",
+    "ё": "yo",
+    "ѝ": "i",
+    "і": "i",
+}
+
+
+def _transliterate(value: str) -> str:
+    """Transliterate Cyrillic characters to their Latin equivalents."""
+
+    return "".join(_CYRILLIC_MAP.get(char, char) for char in value)
 
 
 def _sanitize_segment(segment: str) -> str:
     """Return a filesystem-safe segment preserving human readability."""
 
-    cleaned = _SANITIZE_RE.sub("_", segment.strip())
-    cleaned = cleaned.strip()
+    transliterated = _transliterate(segment.strip())
+    with_underscores = re.sub(r"\s+", "_", transliterated)
+    cleaned = _SANITIZE_RE.sub("_", with_underscores)
+    cleaned = re.sub(r"_+", "_", cleaned)
+    cleaned = cleaned.strip("_")
     if not cleaned:
-        return "segment"
+        return ""
     return cleaned
 
 
@@ -32,11 +114,16 @@ def _normalized_segments(
         candidate = title.replace(" / ", "/")
     candidate = candidate.replace("\\", "/").strip("/")
     pieces = [piece for piece in candidate.split("/") if piece and piece not in {".", ".."}]
-    sanitized = [_sanitize_segment(piece) for piece in pieces if _sanitize_segment(piece)]
+    sanitized: List[str] = []
+    for piece in pieces:
+        cleaned_piece = _sanitize_segment(piece)
+        if cleaned_piece:
+            sanitized.append(cleaned_piece)
     if sanitized:
         return sanitized
     fallback_title = title or f"item-{item_id}"
-    return [_sanitize_segment(fallback_title) or f"item-{item_id}"]
+    fallback = _sanitize_segment(fallback_title)
+    return [fallback or f"item-{item_id}"]
 
 
 def _derive_filename(
