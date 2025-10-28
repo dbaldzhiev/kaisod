@@ -44,8 +44,8 @@
           {% if node.item.last_downloaded_at %}
             <span class="node-download">Downloaded {{ node.item.last_downloaded_at | format_datetime }}</span>
           {% endif %}
-          <span class="node-local" title="Latest extracted files: {{ node.item.latest_extract_path }}">
-            Latest folder: <code>{{ node.item.latest_extract_path }}</code>
+          <span class="node-local" title="Latest extracted files: {{ storage_root }}/{{ node.item.latest_extract_relative }}">
+            Latest folder: <code>{{ storage_root }}/{{ node.item.latest_extract_relative }}</code>
             {% if not node.item.latest_extract_exists %}
               <span class="local-missing">missing</span>
             {% endif %}
@@ -114,9 +114,9 @@
 <section class="storage-info">
   <h2>Storage layout</h2>
   <p>
-    Downloads are saved under <code>{{ storage_root }}</code>.
-    Each item uses <code>{{ storage_root }}/&lt;item-id&gt;/</code> with the current extraction in
-    <code>latest/</code> and dated archives kept separately.
+    Downloads are saved under <code>{{ storage_root }}</code> following the KAIS folder tree.
+    Each monitored file keeps dated archives in <code>&lt;kais-path&gt;/&lt;timestamp&gt;/</code> with the latest extraction stored in
+    <code>latest/</code> inside the same folder.
   </p>
 </section>
 

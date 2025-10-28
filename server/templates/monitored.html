@@ -3,7 +3,8 @@
 <section class="monitored">
   <h2>Monitored items</h2>
   <p class="storage-note">
-    Files are stored under <code>{{ storage_root }}</code>. Each row shows whether the latest archive is present locally.
+    Files are stored under <code>{{ storage_root }}</code>, mirroring the KAIS folder hierarchy. Each row shows whether the
+    latest archive is present locally.
   </p>
   {% if items %}
     <table class="monitored-table">
@@ -31,7 +32,7 @@
             </td>
             <td data-label="Last download">{{ item.last_downloaded_at | format_datetime }}</td>
             <td data-label="Local folder" class="local-folder">
-              <code title="Latest extracted files">{{ item.latest_extract_path }}</code>
+              <code title="Latest extracted files">{{ storage_root }}/{{ item.latest_extract_relative }}</code>
               {% if not item.latest_extract_exists %}
                 <span class="local-missing">missing</span>
               {% endif %}
