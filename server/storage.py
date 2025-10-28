@@ -88,6 +88,15 @@ def _transliterate(value: str) -> str:
     return "".join(_CYRILLIC_MAP.get(char, char) for char in value)
 
 
+def _strip_zip_suffix(segment: str) -> str:
+    """Remove a trailing `.zip` suffix from the provided segment."""
+
+    lowered = segment.lower()
+    if lowered.endswith(".zip"):
+        segment = segment[: -4].rstrip("._-")
+    return segment
+
+
 def _sanitize_segment(segment: str) -> str:
     """Return a filesystem-safe segment preserving human readability."""
 
@@ -120,9 +129,11 @@ def _normalized_segments(
         if cleaned_piece:
             sanitized.append(cleaned_piece)
     if sanitized:
+        stripped_leaf = _strip_zip_suffix(sanitized[-1])
+        sanitized[-1] = stripped_leaf or f"item-{item_id}"
         return sanitized
     fallback_title = title or f"item-{item_id}"
-    fallback = _sanitize_segment(fallback_title)
+    fallback = _strip_zip_suffix(_sanitize_segment(fallback_title))
     return [fallback or f"item-{item_id}"]
 
 

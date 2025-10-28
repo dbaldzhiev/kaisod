@@ -101,7 +101,7 @@ def download_item(
     except ValueError:
         date_dir = observed_date.replace(":", "-")
 
-    item_root, _, archive_name = resolve_item_storage(
+    item_root, _, _archive_name = resolve_item_storage(
         db.base_path,
         raw_path=item_data.get("path"),
         title=item_data.get("title"),
@@ -109,8 +109,15 @@ def download_item(
         item_id=item_id,
     )
     ensure_storage(str(item_root))
-    target_dir = ensure_storage(str(item_root / date_dir))
-    file_path = Path(target_dir) / archive_name
+
+    timestamp_base = date_dir or utcnow().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp_name = f"{timestamp_base}.zip"
+    file_path = item_root / timestamp_name
+    counter = 1
+    while file_path.exists():
+        timestamp_name = f"{timestamp_base}-{counter}.zip"
+        file_path = item_root / timestamp_name
+        counter += 1
 
     total_size = int(response.headers.get("Content-Length") or 0)
     downloaded = 0
