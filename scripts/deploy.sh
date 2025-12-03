@@ -75,7 +75,7 @@ fi
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 apt-get update
-apt-get install -y git python3 python3-venv
+apt-get install -y git python3 python3-venv python3-dev build-essential libxml2-dev libxslt1-dev
 
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
   useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
