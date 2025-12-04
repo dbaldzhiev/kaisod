@@ -57,6 +57,27 @@ footer {
   margin-bottom: 1.5rem;
 }
 
+.monitored .monitored-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.monitored .monitored-actions form {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.monitored .monitored-actions .help-text {
+  margin: 0;
+  color: #4b5563;
+  font-size: 0.9rem;
+}
+
 .monitored .storage-note {
   font-size: 0.9rem;
   color: #4b5563;
