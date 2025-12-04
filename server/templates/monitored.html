@@ -2,6 +2,16 @@
 {% block content %}
 <section class="monitored">
   <h2>Monitored items</h2>
+  <div class="monitored-actions">
+    <form method="post" action="{{ url_for('sync_missing_monitored') }}">
+      <button type="submit" {% if missing_count == 0 %}disabled{% endif %}>
+        Sync missing monitored items
+      </button>
+      <p class="help-text">
+        {{ missing_count }} item{{ '' if missing_count == 1 else 's' }} {{ 'is' if missing_count == 1 else 'are' }} missing locally.
+      </p>
+    </form>
+  </div>
   <p class="storage-note">
     Files are stored under <code>{{ storage_root }}</code>, mirroring the KAIS folder hierarchy. Each row shows whether the
     latest archive is present locally.

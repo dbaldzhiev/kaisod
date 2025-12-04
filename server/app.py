@@ -752,9 +752,61 @@ def create_app() -> Flask:
     def monitored_items() -> str:
         rows = DB.get_items(monitored=True)
         items = [dict(row) for row in rows]
+        missing_count = 0
         for entry in items:
             annotate_item(entry, DB.base_path)
-        return render_template("monitored.html", items=items, storage_root=str(DB.base_path))
+            if entry.get("sync_state") in {"missing", "missing-file"}:
+                missing_count += 1
+        return render_template(
+            "monitored.html",
+            items=items,
+            storage_root=str(DB.base_path),
+            missing_count=missing_count,
+        )
+
+    @app.post("/monitored/sync-missing")
+    def sync_missing_monitored() -> Response:
+        if SCAN_MANAGER.is_running():
+            flash("Cannot sync while a scan is running", "error")
+            return redirect(url_for("monitored_items"))
+
+        rows = DB.get_items(monitored=True)
+        missing_items: List[dict] = []
+        for row in rows:
+            entry = dict(row)
+            annotate_item(entry, DB.base_path)
+            if entry.get("sync_state") in {"missing", "missing-file"}:
+                missing_items.append(entry)
+
+        started = 0
+        errors: List[str] = []
+        for entry in missing_items:
+            item_id = entry.get("id")
+            file_url = entry.get("file_url")
+            observed = entry.get("last_seen_date")
+            if not item_id or not file_url:
+                continue
+            if not observed:
+                errors.append(f"Item {item_id} does not have a last seen date and was skipped")
+                continue
+            try:
+                download_item(DB, int(item_id), str(file_url), str(observed))
+                started += 1
+            except DownloadError as exc:
+                logger.warning("Failed to sync missing item %s: %s", item_id, exc)
+                errors.append(f"Download failed for item {item_id}: {exc}")
+            except Exception as exc:  # pragma: no cover - safeguard
+                logger.exception("Unexpected error downloading missing item %s", item_id)
+                errors.append(f"Download failed for item {item_id}: {exc}")
+
+        if started:
+            flash(f"Started downloads for {started} missing item(s)", "success")
+        else:
+            flash("No missing monitored items to sync", "info")
+        if errors:
+            flash("; ".join(errors), "error")
+
+        return redirect(url_for("monitored_items"))
 
     @app.post("/items/bulk-monitor")
     def bulk_monitor() -> Response:
