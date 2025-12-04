@@ -82,7 +82,7 @@ _CYRILLIC_MAP: Dict[str, str] = {
 }
 
 
-def _transliterate(value: str) -> str:
+def transliterate_cyrillic(value: str) -> str:
     """Transliterate Cyrillic characters to their Latin equivalents."""
 
     return "".join(_CYRILLIC_MAP.get(char, char) for char in value)
@@ -100,7 +100,7 @@ def _strip_zip_suffix(segment: str) -> str:
 def _sanitize_segment(segment: str) -> str:
     """Return a filesystem-safe segment preserving human readability."""
 
-    transliterated = _transliterate(segment.strip())
+    transliterated = transliterate_cyrillic(segment.strip())
     with_underscores = re.sub(r"\s+", "_", transliterated)
     cleaned = _SANITIZE_RE.sub("_", with_underscores)
     cleaned = re.sub(r"_+", "_", cleaned)

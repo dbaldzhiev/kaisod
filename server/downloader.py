@@ -12,7 +12,7 @@ import requests
 import zipfile
 
 from .models import Database, ensure_storage
-from .storage import resolve_item_storage
+from .storage import resolve_item_storage, transliterate_cyrillic
 from .time_utils import utcnow
 
 
@@ -66,6 +66,38 @@ def _safe_extract(archive: zipfile.ZipFile, destination: Path, progress: Optiona
             {"index": index, "total": total, "name": info.filename},
         )
     _emit(progress, "extract:complete", {"destination": str(destination), "members": total})
+
+
+def _transliterate_path(path: Path, root: Path) -> Path:
+    relative = path.relative_to(root)
+    transliterated_parts = [transliterate_cyrillic(part) for part in relative.parts]
+    return root.joinpath(*transliterated_parts)
+
+
+def _deduplicate_target(target: Path) -> Path:
+    if not target.exists():
+        return target
+
+    parent = target.parent
+    stem = target.stem
+    suffix = target.suffix
+    counter = 1
+    while True:
+        candidate = parent / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _rename_to_latin(root: Path) -> None:
+    for path in sorted(root.rglob("*"), key=lambda p: len(p.relative_to(root).parts), reverse=True):
+        target = _transliterate_path(path, root)
+        if target == path:
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        unique_target = _deduplicate_target(target)
+        path.rename(unique_target)
 
 
 def download_item(
@@ -191,6 +223,7 @@ def download_item(
         try:
             with zipfile.ZipFile(file_path) as archive:
                 _safe_extract(archive, extract_dir, progress)
+            _rename_to_latin(extract_dir)
         except zipfile.BadZipFile as exc:
             raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
