@@ -280,6 +280,8 @@ def download_item(
     observed_date: str,
     session: Optional[requests.Session] = None,
     progress: Optional[ProgressCallback] = None,
+    *,
+    merge_shapefiles: bool = True,
 ) -> Optional[int]:
     """Download the file for the monitored item and persist metadata."""
 
@@ -398,8 +400,16 @@ def download_item(
                 _safe_extract(archive, extract_dir, progress)
             _rename_to_latin(extract_dir)
             blob_root = _sync_blob_copy(db, item_id, extract_dir, progress)
-            _update_merged_shapefiles(blob_root, progress)
+            if merge_shapefiles:
+                _update_merged_shapefiles(blob_root, progress)
         except zipfile.BadZipFile as exc:
             raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
     return download_id
+
+
+def merge_all_shapefiles(db: Database, progress: Optional[ProgressCallback] = None) -> None:
+    """Merge shapefiles in the blob directory for all categories."""
+
+    blob_root = ensure_storage(str(Path(db.base_path) / BLOB_FOLDER_NAME))
+    _update_merged_shapefiles(blob_root, progress)
