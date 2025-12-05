@@ -8,6 +8,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, Optional, Set
+import logging
 
 import requests
 import zipfile
@@ -27,6 +28,8 @@ def compute_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8192), b""):
             h.update(chunk)
     return h.hexdigest()
+logger = logging.getLogger(__name__)
+
 ProgressCallback = Callable[[str, Dict[str, object]], None]
 
 DOWNLOAD_CHUNK_SIZE = 65536
@@ -105,11 +108,13 @@ def _rename_to_latin(root: Path) -> None:
 def _iter_data_directories(root: Path) -> Iterable[Path]:
     target_names: Set[str] = {"pozemleni_imoti", "sgradi"}
     seen: Set[Path] = set()
+    logger.debug("Scanning extracted tree for data directories", extra={"root": str(root)})
     for candidate in root.rglob("*"):
         if candidate.is_dir() and candidate.name.lower() in target_names:
             resolved = candidate.resolve()
             if resolved not in seen:
                 seen.add(resolved)
+                logger.info("Found data directory %s", resolved)
                 yield candidate
 
 
@@ -138,18 +143,30 @@ def _detect_blob_category(data_root: Path) -> Optional[str]:
     return None
 
 
-def _sync_blob_copy(db: Database, item_id: int, extract_root: Path) -> None:
+def _sync_blob_copy(
+    db: Database, item_id: int, extract_root: Path, progress: Optional[ProgressCallback]
+) -> None:
     blob_root = ensure_storage(str(Path(db.base_path) / BLOB_FOLDER_NAME))
+    removed = 0
     for stale in blob_root.rglob(f"{item_id}_*"):
         if stale.is_file():
             try:
                 stale.unlink()
+                removed += 1
             except OSError:
-                pass
+                logger.warning("Failed to delete stale blob copy %s", stale)
 
+    _emit(
+        progress,
+        "blob:start",
+        {"extract_root": str(extract_root), "blob_root": str(blob_root), "removed": removed},
+    )
+
+    copied = 0
     for data_root in _iter_data_directories(extract_root):
         category = _detect_blob_category(data_root)
         destination_root = blob_root / category if category else blob_root
+        destination_root.mkdir(parents=True, exist_ok=True)
         for file_path in data_root.rglob("*"):
             if not file_path.is_file():
                 continue
@@ -157,6 +174,16 @@ def _sync_blob_copy(db: Database, item_id: int, extract_root: Path) -> None:
             destination = destination_root / destination_name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file_path, destination)
+            copied += 1
+    _emit(
+        progress,
+        "blob:complete",
+        {"extract_root": str(extract_root), "blob_root": str(blob_root), "copied": copied},
+    )
+    if copied == 0:
+        logger.warning("No pozemleni_imoti/sgradi directories found in %s", extract_root)
+    else:
+        logger.info("Copied %s files into %s", copied, blob_root)
 
 
 def download_item(
@@ -283,7 +310,7 @@ def download_item(
             with zipfile.ZipFile(file_path) as archive:
                 _safe_extract(archive, extract_dir, progress)
             _rename_to_latin(extract_dir)
-            _sync_blob_copy(db, item_id, extract_dir)
+            _sync_blob_copy(db, item_id, extract_dir, progress)
         except zipfile.BadZipFile as exc:
             raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
