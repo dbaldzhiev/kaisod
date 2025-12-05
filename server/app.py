@@ -53,6 +53,152 @@ INTERVALS = {
     "6d": timedelta(days=6),
 }
 
+
+class MissingSyncManager:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self._is_running = False
+        self.progress: Dict[str, object] = {
+            "stage": "idle",
+            "message": "Idle",
+            "current_item": None,
+            "processed": 0,
+            "total": 0,
+            "bytes_downloaded": 0,
+            "bytes_total": 0,
+            "last_completed": None,
+        }
+        self.errors: List[str] = []
+
+    def is_running(self) -> bool:
+        with self.lock:
+            return self._is_running
+
+    def _update_progress(
+        self,
+        *,
+        stage: Optional[str] = None,
+        message: Optional[str] = None,
+        current_item: Optional[str] = None,
+        processed: Optional[int] = None,
+        total: Optional[int] = None,
+        bytes_downloaded: Optional[int] = None,
+        bytes_total: Optional[int] = None,
+        last_completed: Optional[str] = None,
+    ) -> None:
+        with self.lock:
+            if stage is not None:
+                self.progress["stage"] = stage
+            if message is not None:
+                self.progress["message"] = message
+            if current_item is not None:
+                self.progress["current_item"] = current_item
+            if processed is not None:
+                self.progress["processed"] = processed
+            if total is not None:
+                self.progress["total"] = total
+            if bytes_downloaded is not None:
+                self.progress["bytes_downloaded"] = bytes_downloaded
+            if bytes_total is not None:
+                self.progress["bytes_total"] = bytes_total
+            if last_completed is not None:
+                self.progress["last_completed"] = last_completed
+
+    def get_status(self) -> Dict[str, object]:
+        with self.lock:
+            return {
+                "status": "running" if self._is_running else "idle",
+                "progress": dict(self.progress),
+                "errors": list(self.errors),
+            }
+
+    def _progress_callback(self, item_label: str, stage: str, payload: Dict[str, object]) -> None:
+        message = self.progress.get("message", "")
+        bytes_downloaded = self.progress.get("bytes_downloaded", 0)
+        bytes_total = self.progress.get("bytes_total", 0)
+        if stage == "download:start":
+            bytes_total = int(payload.get("total_bytes") or 0)
+            bytes_downloaded = 0
+            message = f"Downloading {item_label}"
+        elif stage == "download:chunk":
+            bytes_downloaded = int(payload.get("downloaded_bytes") or 0)
+            bytes_total = int(payload.get("total_bytes") or 0)
+            if bytes_total:
+                percent = int(bytes_downloaded * 100 / bytes_total)
+                message = f"Downloading {item_label} ({percent}%)"
+            else:
+                message = f"Downloading {item_label}"
+        elif stage == "download:complete":
+            bytes_downloaded = int(payload.get("downloaded_bytes") or 0)
+            bytes_total = int(payload.get("total_bytes") or 0)
+            message = f"Download finished for {item_label}"
+        elif stage == "extract:start":
+            message = f"Extracting {item_label}"
+        elif stage == "extract:member":
+            index = payload.get("index")
+            total = payload.get("total")
+            if index and total:
+                message = f"Extracting {item_label} ({index}/{total})"
+        elif stage == "extract:complete":
+            message = f"Extraction finished for {item_label}"
+        self._update_progress(
+            message=message,
+            current_item=item_label,
+            bytes_downloaded=bytes_downloaded,
+            bytes_total=bytes_total,
+        )
+
+    def _run_sync(self, items: List[dict]) -> None:
+        try:
+            total = len(items)
+            self._update_progress(
+                stage="running",
+                message="Starting sync",
+                processed=0,
+                total=total,
+                bytes_downloaded=0,
+                bytes_total=0,
+                last_completed=None,
+            )
+            for index, entry in enumerate(items, start=1):
+                item_id = int(entry.get("id"))
+                file_url = str(entry.get("file_url"))
+                observed = str(entry.get("last_seen_date"))
+                title = str(entry.get("title") or f"Item {item_id}")
+                self._update_progress(stage="running", message=f"Downloading {title}", current_item=title)
+                try:
+                    download_item(
+                        DB,
+                        item_id,
+                        file_url,
+                        observed,
+                        progress=lambda stage, payload: self._progress_callback(title, stage, payload),
+                    )
+                    self._update_progress(last_completed=title)
+                except DownloadError as exc:
+                    logger.warning("Failed to sync missing item %s: %s", item_id, exc)
+                    with self.lock:
+                        self.errors.append(f"Item {item_id}: {exc}")
+                except Exception as exc:  # pragma: no cover - safeguard
+                    logger.exception("Unexpected error downloading missing item %s", item_id)
+                    with self.lock:
+                        self.errors.append(f"Item {item_id}: {exc}")
+                self._update_progress(processed=index, bytes_downloaded=0, bytes_total=0)
+            self._update_progress(stage="idle", message="Sync complete", current_item=None)
+        finally:
+            with self.lock:
+                self._is_running = False
+
+    def start(self, items: List[dict]) -> bool:
+        with self.lock:
+            if self._is_running:
+                return False
+            self._is_running = True
+            self.errors = []
+        thread = threading.Thread(target=self._run_sync, args=(items,), daemon=True)
+        thread.start()
+        return True
+
 BASE_PATH = ensure_storage(str(load_configured_base_path()))
 DB = Database(base_path=str(BASE_PATH))
 
@@ -286,6 +432,17 @@ def annotate_item(entry: dict, base_path: Path) -> None:
     entry["sync_label"] = label
 
 
+def collect_missing_monitored_items(db: Database) -> List[dict]:
+    rows = db.get_items(monitored=True)
+    missing_items: List[dict] = []
+    for row in rows:
+        entry = dict(row)
+        annotate_item(entry, db.base_path)
+        if entry.get("sync_state") in {"missing", "missing-file"}:
+            missing_items.append(entry)
+    return missing_items
+
+
 class ScanManager:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -456,6 +613,7 @@ class ScanManager:
 
 
 SCAN_MANAGER = ScanManager(DB)
+MISSING_SYNC_MANAGER = MissingSyncManager()
 
 
 def run_scan() -> Optional[detector.ScanResult]:
@@ -769,44 +927,39 @@ def create_app() -> Flask:
         if SCAN_MANAGER.is_running():
             flash("Cannot sync while a scan is running", "error")
             return redirect(url_for("monitored_items"))
+        if MISSING_SYNC_MANAGER.is_running():
+            flash("Sync is already in progress", "info")
+            return redirect(url_for("monitored_items"))
 
-        rows = DB.get_items(monitored=True)
-        missing_items: List[dict] = []
-        for row in rows:
-            entry = dict(row)
-            annotate_item(entry, DB.base_path)
-            if entry.get("sync_state") in {"missing", "missing-file"}:
-                missing_items.append(entry)
-
-        started = 0
-        errors: List[str] = []
-        for entry in missing_items:
-            item_id = entry.get("id")
-            file_url = entry.get("file_url")
-            observed = entry.get("last_seen_date")
-            if not item_id or not file_url:
-                continue
-            if not observed:
-                errors.append(f"Item {item_id} does not have a last seen date and was skipped")
-                continue
-            try:
-                download_item(DB, int(item_id), str(file_url), str(observed))
-                started += 1
-            except DownloadError as exc:
-                logger.warning("Failed to sync missing item %s: %s", item_id, exc)
-                errors.append(f"Download failed for item {item_id}: {exc}")
-            except Exception as exc:  # pragma: no cover - safeguard
-                logger.exception("Unexpected error downloading missing item %s", item_id)
-                errors.append(f"Download failed for item {item_id}: {exc}")
-
-        if started:
-            flash(f"Started downloads for {started} missing item(s)", "success")
-        else:
+        missing_items = collect_missing_monitored_items(DB)
+        if not missing_items:
             flash("No missing monitored items to sync", "info")
-        if errors:
-            flash("; ".join(errors), "error")
+            return redirect(url_for("monitored_items"))
 
+        started = MISSING_SYNC_MANAGER.start(missing_items)
+        if started:
+            flash(f"Started syncing {len(missing_items)} missing item(s)", "success")
+        else:
+            flash("Unable to start sync", "error")
         return redirect(url_for("monitored_items"))
+
+    @app.post("/monitored/sync-missing/start")
+    def sync_missing_monitored_start() -> Response:
+        if SCAN_MANAGER.is_running():
+            return jsonify({"ok": False, "error": "Cannot sync while a scan is running"}), 400
+
+        missing_items = collect_missing_monitored_items(DB)
+        if not missing_items:
+            return jsonify({"ok": False, "error": "No missing monitored items to sync", "total": 0})
+
+        if not MISSING_SYNC_MANAGER.start(missing_items):
+            return jsonify({"ok": False, "error": "A sync is already running"}), 400
+
+        return jsonify({"ok": True, "total": len(missing_items)})
+
+    @app.get("/monitored/sync-missing/status")
+    def sync_missing_monitored_status() -> Response:
+        return jsonify(MISSING_SYNC_MANAGER.get_status())
 
     @app.post("/items/bulk-monitor")
     def bulk_monitor() -> Response:
