@@ -106,15 +106,19 @@ def _rename_to_latin(root: Path) -> None:
 
 
 def _iter_data_directories(root: Path) -> Iterable[Path]:
-    target_names: Set[str] = {"pozemleni_imoti", "sgradi"}
     seen: Set[Path] = set()
     logger.debug("Scanning extracted tree for data directories", extra={"root": str(root)})
     for candidate in root.rglob("*"):
-        if candidate.is_dir() and candidate.name.lower() in target_names:
+        if not candidate.is_dir():
+            continue
+        category = _detect_blob_category(candidate)
+        if category:
             resolved = candidate.resolve()
             if resolved not in seen:
                 seen.add(resolved)
-                logger.info("Found data directory %s", resolved)
+                logger.info(
+                    "Found data directory %s (category=%s)", resolved, category
+                )
                 yield candidate
 
 
@@ -136,9 +140,10 @@ def _build_blob_name(item_id: int, source_root: Path, file_path: Path) -> str:
 
 def _detect_blob_category(data_root: Path) -> Optional[str]:
     name = data_root.name.lower()
-    if "sgradi" in name:
+    normalized = re.sub(r"[^a-z0-9]+", "_", name).strip("_")
+    if "sgradi" in normalized:
         return "sgradi"
-    if "pozemleni_imoti" in name:
+    if "pozemleni_imoti" in normalized or normalized == "pozemleni":
         return "pozemleni_imoti"
     return None
 
