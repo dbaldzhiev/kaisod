@@ -150,6 +150,14 @@ class MissingSyncManager:
                 if copied is not None
                 else f"Blob copies ready for {item_label}"
             )
+        elif stage == "merge:start":
+            category = payload.get("category")
+            message = f"Merging shapefiles for {category}" if category else "Merging shapefiles"
+        elif stage == "merge:complete":
+            category = payload.get("category")
+            message = (
+                f"Merged shapefiles for {category}" if category else "Merged shapefiles"
+            )
         self._update_progress(
             message=message,
             current_item=item_label,

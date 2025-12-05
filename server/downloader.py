@@ -11,6 +11,7 @@ from typing import Callable, Dict, Iterable, Optional, Set
 import logging
 
 import requests
+import shapefile
 import zipfile
 
 from .models import Database, ensure_storage
@@ -150,7 +151,7 @@ def _detect_blob_category(data_root: Path) -> Optional[str]:
 
 def _sync_blob_copy(
     db: Database, item_id: int, extract_root: Path, progress: Optional[ProgressCallback]
-) -> None:
+) -> Path:
     blob_root = ensure_storage(str(Path(db.base_path) / BLOB_FOLDER_NAME))
     removed = 0
     for stale in blob_root.rglob(f"{item_id}_*"):
@@ -189,6 +190,87 @@ def _sync_blob_copy(
         logger.warning("No pozemleni_imoti/sgradi directories found in %s", extract_root)
     else:
         logger.info("Copied %s files into %s", copied, blob_root)
+
+    return blob_root
+
+
+def _read_prj(shp_path: Path) -> Optional[str]:
+    prj_path = shp_path.with_suffix(".prj")
+    if prj_path.exists():
+        try:
+            return prj_path.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to read PRJ file alongside %s", shp_path)
+    return None
+
+
+def _merge_category_shapefiles(category_root: Path, category: str) -> Optional[Path]:
+    shp_files = sorted(category_root.rglob("*.shp"))
+    if not shp_files:
+        return None
+
+    output_root = category_root.parent / "merged" / category
+    output_root.mkdir(parents=True, exist_ok=True)
+    base_name = output_root / f"{category}_merged"
+
+    for suffix in (".shp", ".shx", ".dbf", ".cpg", ".prj"):
+        target = base_name.with_suffix(suffix)
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                logger.warning("Failed to remove previous merged file %s", target)
+
+    with shapefile.Reader(str(shp_files[0])) as prototype:
+        fields = prototype.fields[1:]
+        shape_type = prototype.shapeType
+        prj_contents = _read_prj(shp_files[0])
+
+    writer = shapefile.Writer(str(base_name))
+    writer.fields = fields
+    writer.shapeType = shape_type
+
+    merged = 0
+    for shp_path in shp_files:
+        with shapefile.Reader(str(shp_path)) as reader:
+            if reader.shapeType != shape_type or reader.fields[1:] != fields:
+                logger.warning(
+                    "Skipping incompatible shapefile %s for category %s", shp_path, category
+                )
+                continue
+            for shape_record in reader.iterShapeRecords():
+                writer.shape(shape_record.shape)
+                writer.record(*shape_record.record)
+                merged += 1
+
+    writer.close()
+
+    if merged == 0:
+        logger.warning("No compatible records merged for %s", category)
+    if prj_contents:
+        try:
+            base_name.with_suffix(".prj").write_text(prj_contents, encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to write PRJ for merged shapefile %s", base_name)
+
+    logger.info(
+        "Merged %s shapefile records into %s", merged, base_name.with_suffix(".shp")
+    )
+    return base_name.with_suffix(".shp")
+
+
+def _update_merged_shapefiles(blob_root: Path, progress: Optional[ProgressCallback]) -> None:
+    for category in ("sgradi", "pozemleni_imoti"):
+        _emit(progress, "merge:start", {"category": category})
+        category_root = blob_root / category
+        merged_path = None
+        if category_root.exists():
+            merged_path = _merge_category_shapefiles(category_root, category)
+        _emit(
+            progress,
+            "merge:complete",
+            {"category": category, "output": str(merged_path) if merged_path else None},
+        )
 
 
 def download_item(
@@ -315,7 +397,8 @@ def download_item(
             with zipfile.ZipFile(file_path) as archive:
                 _safe_extract(archive, extract_dir, progress)
             _rename_to_latin(extract_dir)
-            _sync_blob_copy(db, item_id, extract_dir, progress)
+            blob_root = _sync_blob_copy(db, item_id, extract_dir, progress)
+            _update_merged_shapefiles(blob_root, progress)
         except zipfile.BadZipFile as exc:
             raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
