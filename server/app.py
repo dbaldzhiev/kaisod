@@ -21,7 +21,11 @@ if __package__ in (None, ""):
         sys.path.insert(0, PARENT_DIR)
 
     from server import crawler, detector  # type: ignore[no-redef]
-    from server.downloader import DownloadError, download_item  # type: ignore[no-redef]
+    from server.downloader import (  # type: ignore[no-redef]
+        DownloadError,
+        download_item,
+        merge_all_shapefiles,
+    )
     from server.models import (
         Database,
         ensure_storage,
@@ -33,7 +37,7 @@ if __package__ in (None, ""):
     from server.time_utils import utcnow  # type: ignore[no-redef]
 else:
     from . import crawler, detector
-    from .downloader import DownloadError, download_item
+    from .downloader import DownloadError, download_item, merge_all_shapefiles
     from .models import (
         Database,
         ensure_storage,
@@ -177,6 +181,7 @@ class MissingSyncManager:
                 bytes_total=0,
                 last_completed=None,
             )
+            downloaded_any = False
             for index, entry in enumerate(items, start=1):
                 item_id = int(entry.get("id"))
                 file_url = str(entry.get("file_url"))
@@ -190,7 +195,9 @@ class MissingSyncManager:
                         file_url,
                         observed,
                         progress=lambda stage, payload: self._progress_callback(title, stage, payload),
+                        merge_shapefiles=False,
                     )
+                    downloaded_any = True
                     self._update_progress(last_completed=title)
                 except DownloadError as exc:
                     logger.warning("Failed to sync missing item %s: %s", item_id, exc)
@@ -201,6 +208,13 @@ class MissingSyncManager:
                     with self.lock:
                         self.errors.append(f"Item {item_id}: {exc}")
                 self._update_progress(processed=index, bytes_downloaded=0, bytes_total=0)
+            if downloaded_any:
+                merge_all_shapefiles(
+                    DB,
+                    progress=lambda stage, payload: self._progress_callback(
+                        "Missing items", stage, payload
+                    ),
+                )
             self._update_progress(stage="idle", message="Sync complete", current_item=None)
         finally:
             with self.lock:
