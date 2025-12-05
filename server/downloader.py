@@ -106,7 +106,7 @@ def _iter_data_directories(root: Path) -> Iterable[Path]:
     target_names: Set[str] = {"pozemleni_imoti", "sgradi"}
     seen: Set[Path] = set()
     for candidate in root.rglob("*"):
-        if candidate.is_dir() and candidate.name in target_names:
+        if candidate.is_dir() and candidate.name.lower() in target_names:
             resolved = candidate.resolve()
             if resolved not in seen:
                 seen.add(resolved)
