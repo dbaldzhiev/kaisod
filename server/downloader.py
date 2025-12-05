@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterable, Optional, Set
 
 import requests
 import zipfile
@@ -31,6 +32,7 @@ ProgressCallback = Callable[[str, Dict[str, object]], None]
 DOWNLOAD_CHUNK_SIZE = 65536
 DOWNLOAD_PROGRESS_STEP = 5  # percentage points
 DOWNLOAD_PROGRESS_BYTES = 5 * 1024 * 1024  # 5 MiB when size unknown
+BLOB_FOLDER_NAME = "kais-blob"
 
 
 def _emit(progress: Optional[ProgressCallback], stage: str, payload: Dict[str, object]) -> None:
@@ -98,6 +100,52 @@ def _rename_to_latin(root: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         unique_target = _deduplicate_target(target)
         path.rename(unique_target)
+
+
+def _iter_data_directories(root: Path) -> Iterable[Path]:
+    target_names: Set[str] = {"pozemleni_imoti", "sgradi"}
+    seen: Set[Path] = set()
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and candidate.name in target_names:
+            resolved = candidate.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                yield candidate
+
+
+def _sanitize_blob_component(component: str) -> str:
+    transliterated = transliterate_cyrillic(component)
+    cleaned = re.sub(r"[^0-9A-Za-z._()\-]+", "_", transliterated)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or "part"
+
+
+def _build_blob_name(item_id: int, source_root: Path, file_path: Path) -> str:
+    relative = file_path.relative_to(source_root)
+    pieces = [_sanitize_blob_component(part) for part in relative.parts]
+    joined = "_".join(piece for piece in pieces if piece)
+    if not joined:
+        joined = "file"
+    return f"{item_id}_{source_root.name}_{joined}"
+
+
+def _sync_blob_copy(db: Database, item_id: int, extract_root: Path) -> None:
+    blob_root = ensure_storage(str(Path(db.base_path) / BLOB_FOLDER_NAME))
+    for stale in blob_root.glob(f"{item_id}_*"):
+        if stale.is_file():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+    for data_root in _iter_data_directories(extract_root):
+        for file_path in data_root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            destination_name = _build_blob_name(item_id, data_root, file_path)
+            destination = blob_root / destination_name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file_path, destination)
 
 
 def download_item(
@@ -224,6 +272,7 @@ def download_item(
             with zipfile.ZipFile(file_path) as archive:
                 _safe_extract(archive, extract_dir, progress)
             _rename_to_latin(extract_dir)
+            _sync_blob_copy(db, item_id, extract_dir)
         except zipfile.BadZipFile as exc:
             raise DownloadError(f"Downloaded archive is corrupt: {file_path}") from exc
 
