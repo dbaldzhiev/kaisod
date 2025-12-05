@@ -65,17 +65,50 @@ footer {
   flex-wrap: wrap;
 }
 
-.monitored .monitored-actions form {
+.monitored .monitored-actions .help-text {
+  margin: 0;
+  color: #4b5563;
+  font-size: 0.9rem;
+}
+
+.sync-controls {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
 }
 
-.monitored .monitored-actions .help-text {
-  margin: 0;
-  color: #4b5563;
+.sync-progress {
+  min-width: 280px;
+  flex: 1 1 320px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.sync-progress-bar {
+  position: relative;
+  height: 10px;
+  background: #e5e7eb;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.sync-progress-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  width: 0%;
+  transition: width 0.25s ease;
+}
+
+.sync-progress-message,
+.sync-progress-detail {
+  margin: 0.25rem 0 0;
   font-size: 0.9rem;
+  color: #374151;
 }
 
 .monitored .storage-note {

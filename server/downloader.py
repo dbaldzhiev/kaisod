@@ -129,9 +129,18 @@ def _build_blob_name(item_id: int, source_root: Path, file_path: Path) -> str:
     return f"{item_id}_{source_root.name}_{joined}"
 
 
+def _detect_blob_category(data_root: Path) -> Optional[str]:
+    name = data_root.name.lower()
+    if "sgradi" in name:
+        return "sgradi"
+    if "pozemleni_imoti" in name:
+        return "pozemleni_imoti"
+    return None
+
+
 def _sync_blob_copy(db: Database, item_id: int, extract_root: Path) -> None:
     blob_root = ensure_storage(str(Path(db.base_path) / BLOB_FOLDER_NAME))
-    for stale in blob_root.glob(f"{item_id}_*"):
+    for stale in blob_root.rglob(f"{item_id}_*"):
         if stale.is_file():
             try:
                 stale.unlink()
@@ -139,11 +148,13 @@ def _sync_blob_copy(db: Database, item_id: int, extract_root: Path) -> None:
                 pass
 
     for data_root in _iter_data_directories(extract_root):
+        category = _detect_blob_category(data_root)
+        destination_root = blob_root / category if category else blob_root
         for file_path in data_root.rglob("*"):
             if not file_path.is_file():
                 continue
             destination_name = _build_blob_name(item_id, data_root, file_path)
-            destination = blob_root / destination_name
+            destination = destination_root / destination_name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file_path, destination)
 

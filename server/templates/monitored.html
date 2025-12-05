@@ -3,14 +3,19 @@
 <section class="monitored">
   <h2>Monitored items</h2>
   <div class="monitored-actions">
-    <form method="post" action="{{ url_for('sync_missing_monitored') }}">
-      <button type="submit" {% if missing_count == 0 %}disabled{% endif %}>
+    <div class="sync-controls">
+      <button type="button" id="sync-missing-button" {% if missing_count == 0 %}disabled{% endif %}>
         Sync missing monitored items
       </button>
-      <p class="help-text">
+      <p class="help-text" id="missing-sync-help">
         {{ missing_count }} item{{ '' if missing_count == 1 else 's' }} {{ 'is' if missing_count == 1 else 'are' }} missing locally.
       </p>
-    </form>
+    </div>
+    <div id="missing-sync-progress" class="sync-progress" data-total="{{ missing_count }}">
+      <div class="sync-progress-bar"><span class="sync-progress-fill"></span></div>
+      <p class="sync-progress-message" data-role="message">No sync in progress.</p>
+      <p class="sync-progress-detail" data-role="detail"></p>
+    </div>
   </div>
   <p class="storage-note">
     Files are stored under <code>{{ storage_root }}</code>, mirroring the KAIS folder hierarchy. Each row shows whether the

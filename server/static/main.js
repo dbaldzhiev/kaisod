@@ -57,6 +57,20 @@ const formatDisplayDate = (isoString) => {
   }
 };
 
+const formatBytes = (value) => {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num) || num <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = num;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  if (unitIndex === 0) return `${Math.round(size)} ${units[unitIndex]}`;
+  return `${size.toFixed(1)} ${units[unitIndex]}`;
+};
+
 const updateScanStatusBanner = (data) => {
   const banner = document.getElementById('scan-status-banner');
   if (!banner) return;
@@ -455,6 +469,103 @@ document.addEventListener('DOMContentLoaded', () => {
         rememberNodeCollapse(node, false);
       });
     });
+  }
+
+  const missingSyncButton = document.getElementById('sync-missing-button');
+  const missingSyncProgress = document.getElementById('missing-sync-progress');
+  const missingSyncMessage = missingSyncProgress?.querySelector('[data-role="message"]');
+  const missingSyncDetail = missingSyncProgress?.querySelector('[data-role="detail"]');
+  const missingSyncFill = missingSyncProgress?.querySelector('.sync-progress-fill');
+  let missingSyncTimer = null;
+
+  const renderMissingSyncStatus = (data) => {
+    if (!missingSyncProgress) return;
+    const running = data?.status === 'running';
+    const progress = data?.progress || {};
+    const processed = Number(progress.processed || 0);
+    const total = Number(progress.total || 0);
+    const percent = total > 0 ? Math.min(100, Math.floor((processed * 100) / total)) : 0;
+    if (missingSyncFill) {
+      missingSyncFill.style.width = `${percent}%`;
+    }
+    if (missingSyncMessage) {
+      missingSyncMessage.textContent = progress.message || (running ? 'Sync in progress' : 'No sync in progress');
+    }
+    if (missingSyncDetail) {
+      const parts = [];
+      if (total) {
+        parts.push(`Items: ${processed}/${total}`);
+      }
+      if (running && progress.current_item) {
+        parts.push(`Current: ${progress.current_item}`);
+      }
+      if (!running && progress.last_completed) {
+        parts.push(`Last completed: ${progress.last_completed}`);
+      }
+      const bytesDownloaded = Number(progress.bytes_downloaded || 0);
+      const bytesTotal = Number(progress.bytes_total || 0);
+      if (bytesTotal > 0) {
+        parts.push(`File progress: ${formatBytes(bytesDownloaded)} / ${formatBytes(bytesTotal)}`);
+      }
+      const errors = Array.isArray(data?.errors) ? data.errors : [];
+      if (!running && errors.length > 0) {
+        parts.push(`${errors.length} error${errors.length === 1 ? '' : 's'}`);
+      }
+      missingSyncDetail.textContent = parts.join(' • ');
+    }
+    if (missingSyncButton) {
+      missingSyncButton.disabled = running;
+    }
+  };
+
+  const pollMissingSyncStatus = async () => {
+    if (!missingSyncProgress) return;
+    if (missingSyncTimer) {
+      window.clearTimeout(missingSyncTimer);
+      missingSyncTimer = null;
+    }
+    try {
+      const resp = await fetch('/monitored/sync-missing/status');
+      if (resp.ok) {
+        const data = await resp.json();
+        renderMissingSyncStatus(data);
+      }
+    } catch (err) {
+      console.warn('Failed to poll missing sync status', err);
+    } finally {
+      missingSyncTimer = window.setTimeout(pollMissingSyncStatus, 3000);
+    }
+  };
+
+  const startMissingSync = async () => {
+    if (!missingSyncButton) return;
+    const originalLabel = missingSyncButton.textContent;
+    missingSyncButton.disabled = true;
+    missingSyncButton.textContent = 'Starting…';
+    try {
+      if (missingSyncTimer) {
+        window.clearTimeout(missingSyncTimer);
+        missingSyncTimer = null;
+      }
+      const resp = await fetch('/monitored/sync-missing/start', { method: 'POST' });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data?.ok) {
+        const message = data?.error || 'Unable to start sync.';
+        alert(message);
+      } else {
+        pollMissingSyncStatus();
+      }
+    } catch (err) {
+      console.error('Failed to start missing sync', err);
+      alert('Failed to start sync.');
+    } finally {
+      missingSyncButton.textContent = originalLabel;
+    }
+  };
+
+  if (missingSyncButton) {
+    missingSyncButton.addEventListener('click', startMissingSync);
+    pollMissingSyncStatus();
   }
 
   refreshDirectoryPending();
