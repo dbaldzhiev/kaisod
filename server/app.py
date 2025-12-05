@@ -141,6 +141,15 @@ class MissingSyncManager:
                 message = f"Extracting {item_label} ({index}/{total})"
         elif stage == "extract:complete":
             message = f"Extraction finished for {item_label}"
+        elif stage == "blob:start":
+            message = f"Syncing blob copies for {item_label}"
+        elif stage == "blob:complete":
+            copied = payload.get("copied")
+            message = (
+                f"Blob copies ready for {item_label} ({copied} files)"
+                if copied is not None
+                else f"Blob copies ready for {item_label}"
+            )
         self._update_progress(
             message=message,
             current_item=item_label,
